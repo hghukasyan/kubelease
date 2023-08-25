@@ -1,0 +1,285 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: environmentleases.platform.kubelease.io
+spec:
+  group: platform.kubelease.io
+  names:
+    kind: EnvironmentLease
+    listKind: EnvironmentLeaseList
+    plural: environmentleases
+    shortNames:
+    - envlease
+    - el
+    singular: environmentlease
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.namespace
+      name: Namespace
+      type: string
+    - jsonPath: .status.expiresAt
+      name: Expires
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          EnvironmentLease is the Schema for the environmentleases API.
+          It is cluster-scoped because it manages Namespaces (cluster-scoped) and
+          supporting resources inside those namespaces.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: EnvironmentLeaseSpec defines the desired state of EnvironmentLease.
+            properties:
+              limits:
+                description: Limits, if set, creates a LimitRange in the managed Namespace.
+                properties:
+                  default:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: Default are default limits applied to containers
+                      that omit limits.
+                    type: object
+                  defaultRequest:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: DefaultRequest are default requests applied to containers
+                      that omit requests.
+                    type: object
+                  max:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: Max is the maximum amount of resources a container
+                      may request/limit.
+                    type: object
+                  min:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: Min is the minimum amount of resources a container
+                      may request/limit.
+                    type: object
+                type: object
+              namespace:
+                description: Namespace configures the managed Namespace.
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: Annotations are applied to the managed Namespace.
+                    type: object
+                  generateName:
+                    description: |-
+                      GenerateName is a prefix used with Kubernetes generateName semantics when
+                      Name is empty. Example: "preview-" yields names like "preview-r82jx".
+                    type: string
+                  labels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Labels are applied to the managed Namespace (in addition to KubeLease
+                      management labels).
+                    type: object
+                  name:
+                    description: |-
+                      Name, if set, creates a Namespace with this exact name. Takes precedence
+                      over GenerateName. Must not be a protected system namespace.
+                    type: string
+                type: object
+              networkPolicy:
+                description: NetworkPolicy configures NetworkPolicy resources for
+                  the environment.
+                properties:
+                  defaultDeny:
+                    description: |-
+                      DefaultDeny, when true, creates a NetworkPolicy that denies all ingress
+                      and egress traffic by default.
+                    type: boolean
+                type: object
+              owner:
+                description: Owner identifies who requested the environment.
+                properties:
+                  name:
+                    description: Name is the individual owner of the environment.
+                    type: string
+                  team:
+                    description: Team is the owning team.
+                    type: string
+                type: object
+              quota:
+                description: Quota, if set, creates a ResourceQuota in the managed
+                  Namespace.
+                properties:
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: Limits are summed into ResourceQuota hard as limits.<resource>.
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: Requests are summed into ResourceQuota hard as requests.<resource>.
+                    type: object
+                type: object
+              ttl:
+                description: |-
+                  TTL is how long the environment should exist after creation.
+                  Represented as a Kubernetes duration string (e.g. "8h", "30m").
+                type: string
+            required:
+            - namespace
+            - ttl
+            type: object
+          status:
+            description: EnvironmentLeaseStatus defines the observed state of EnvironmentLease.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the lease.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              createdAt:
+                description: |-
+                  CreatedAt is when the lease window started. Persisted so restarts do not
+                  reset the expiration clock.
+                format: date-time
+                type: string
+              expiresAt:
+                description: |-
+                  ExpiresAt is CreatedAt + Spec.TTL. Recalculated when Spec.TTL changes
+                  relative to the sticky CreatedAt.
+                format: date-time
+                type: string
+              namespace:
+                description: Namespace is the name of the managed Namespace.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              phase:
+                description: |-
+                  Phase is a human-readable summary of the lease lifecycle.
+                  Prefer Conditions for programmatic decisions.
+                enum:
+                - Pending
+                - Provisioning
+                - Active
+                - Expiring
+                - Cleaning
+                - Expired
+                - Failed
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

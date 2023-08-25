@@ -1,0 +1,35 @@
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLease
+metadata:
+  name: payment-api-pr-1842
+spec:
+  ttl: 8h
+
+  owner:
+    name: hayk
+    team: payments
+
+  namespace:
+    generateName: preview-
+    labels:
+      environment: preview
+      application: payments
+
+  quota:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+
+  limits:
+    default:
+      cpu: 500m
+      memory: 512Mi
+    defaultRequest:
+      cpu: 100m
+      memory: 128Mi
+
+  networkPolicy:
+    defaultDeny: true
