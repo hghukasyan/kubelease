@@ -10,12 +10,7 @@ KubeLease safely cleans up the managed Namespace and its supporting resources.
 
 Preview environments, CI sandboxes, and short-lived developer namespaces are easy
 to create and hard to clean up. KubeLease treats environment lifetime as a first-class
-Kubernetes API:
-
-- Declarative TTL-based leases
-- Consistent ResourceQuota / LimitRange / NetworkPolicy defaults
-- Finalizer-based cleanup that survives controller restarts
-- Level-based reconciliation (idempotent, restart-safe)
+Kubernetes API with renewal, max lifetime, expiration warnings, and a kubectl plugin.
 
 ## Use cases
 
@@ -44,192 +39,167 @@ Kubernetes API:
         v                   v                   v
   +-----------+   +----------------+   +------------------+
   | Namespace |   | ResourceQuota  |   | LimitRange       |
-  | (no OR)   |   | LimitRange     |   | NetworkPolicy    |
-  | labels +  |   | NetworkPolicy  |   | (OwnerReference) |
-  | finalizer |   | (OwnerRef)     |   +------------------+
+  | labels +  |   | LimitRange     |   | NetworkPolicy    |
+  | lease-uid |   | NetworkPolicy  |   | (OwnerReference) |
+  | (no OR)   |   | (OwnerRef)     |   +------------------+
   +-----------+   +----------------+
 ```
 
 **Design notes**
 
 - `EnvironmentLease` is **cluster-scoped** because it manages Namespaces.
-- The managed **Namespace has no OwnerReference**. Ownership is tracked with
-  labels (`app.kubernetes.io/managed-by=kubelease`, `kubelease.io/lease=<name>`)
-  and cleaned up via the lease finalizer. This avoids GC races with Namespace
-  cascading deletion.
+- The managed **Namespace has no OwnerReference**. Ownership uses labels
+  (`app.kubernetes.io/managed-by=kubelease`, `kubelease.io/lease=<name>`) plus
+  annotation `kubelease.io/lease-uid=<uid>`, cleaned up via the lease finalizer.
 - Resources **inside** the Namespace use OwnerReferences to the lease.
-
-## Installation
-
-```bash
-# Install CRDs
-make install
-
-# Deploy the controller (image must be available to the cluster)
-make deploy IMG=<your-registry>/kubelease:tag
-```
-
-Or apply generated manifests from `config/`.
-
-## Quick Start
-
-```bash
-kubectl apply -f config/samples/platform_v1alpha1_environmentlease.yaml
-kubectl get environmentleases
-kubectl get ns -l app.kubernetes.io/managed-by=kubelease
-```
-
-## EnvironmentLease example
-
-```yaml
-apiVersion: platform.kubelease.io/v1alpha1
-kind: EnvironmentLease
-metadata:
-  name: payment-api-pr-1842
-spec:
-  ttl: 8h
-  owner:
-    name: hayk
-    team: payments
-  namespace:
-    generateName: preview-
-    labels:
-      environment: preview
-      application: payments
-  quota:
-    requests:
-      cpu: "2"
-      memory: 4Gi
-    limits:
-      cpu: "4"
-      memory: 8Gi
-  limits:
-    default:
-      cpu: 500m
-      memory: 512Mi
-    defaultRequest:
-      cpu: 100m
-      memory: 128Mi
-  networkPolicy:
-    defaultDeny: true
-```
+- **Renewal model:** increase `spec.ttl`. Controller sets
+  `status.expiresAt = createdAt + ttl`, clamped to `createdAt + maxTTL`.
 
 ## Lifecycle
 
 ```text
-Created
-  -> Pending/Provisioning
-  -> Active  (RequeueAfter until expiresAt)
-  -> Expiring/Cleaning (TTL elapsed or CR deleted)
-  -> Expired (namespace gone)
-  -> object removed (finalizer cleared on delete)
+Create
+  |
+  v
+Provisioning
+  |
+  v
+Active <---------+
+  |              |
+  |            Renew (increase spec.ttl)
+  |              |
+  +--------------+
+  |
+  | warnings (LeaseExpiring events)
+  v
+Expiring
+  |
+  v
+Cleaning
+  |
+  v
+Expired
 ```
 
-TTL timestamps:
+## CLI installation
 
-- `status.createdAt` is set once and never reset on controller restart
-- `status.expiresAt = createdAt + spec.ttl`
-- Changing `spec.ttl` recalculates `expiresAt` from the sticky `createdAt`
+```bash
+go install github.com/hghukasyan/kubelease/cmd/kubectl-kubelease@latest
+# or: make cli && export PATH="$PWD/bin:$PATH"
+
+kubectl kubelease --help
+```
+
+## Create environment
+
+```bash
+kubectl kubelease create payment-pr \
+  --ttl 8h \
+  --max-ttl 72h \
+  --owner hayk \
+  --team payments \
+  --cpu-request 2 \
+  --memory-request 4Gi \
+  --default-deny \
+  --warning 1h \
+  --warning 15m
+```
+
+## List / get / extend / expire
+
+```bash
+kubectl kubelease list
+kubectl kubelease get payment-pr
+kubectl kubelease extend payment-pr --for 4h
+kubectl kubelease expire payment-pr
+```
+
+`expire` deletes the `EnvironmentLease` CR. The controller finalizer performs cleanup.
+The CLI never deletes Namespaces directly.
+
+## Installation (controller)
+
+```bash
+make install
+make deploy IMG=<your-registry>/kubelease:tag
+```
 
 ## Status / Conditions
 
 | Field | Meaning |
 |---|---|
-| `status.phase` | Human-readable summary (`Pending`, `Provisioning`, `Active`, `Expiring`, `Cleaning`, `Expired`, `Failed`) |
+| `status.phase` | `Pending`, `Provisioning`, `Active`, `Expiring`, `Cleaning`, `Expired`, `Failed` |
 | `status.namespace` | Managed Namespace name |
-| `status.createdAt` / `expiresAt` | Lease window |
-| `status.observedGeneration` | Last processed `metadata.generation` |
-| `status.conditions` | Authoritative machine-readable state (`Ready`, `EnvironmentCreated`, `Cleanup`) |
+| `status.createdAt` | Sticky lease start (from `metadata.creationTimestamp`) |
+| `status.expiresAt` | `createdAt + ttl`, clamped to max |
+| `status.maximumExpiresAt` | `createdAt + maxTTL` |
+| `status.warningsDelivered` | Warning keys already emitted (restart-safe) |
+| Conditions | `Ready`, `Expiring`, `Cleanup`, `Degraded` |
+
+## Field ownership
+
+| Resource | KubeLease owns | Users may add |
+|---|---|---|
+| Namespace | management labels, `kubelease.io/lease-uid` | extra labels/annotations (merged) |
+| ResourceQuota | `spec.hard`, management labels | — |
+| LimitRange | container limit item, labels | — |
+| NetworkPolicy | selector, policyTypes, empty ingress/egress | — |
+
+Manual Namespace delete while Active: controller **recreates the same** `status.namespace` name.
 
 ## Metrics
 
-KubeLease registers:
+| Metric | Type |
+|---|---|
+| `kubelease_leases{phase=...}` | Gauge (bounded phase label) |
+| `kubelease_leases_created_total` | Counter |
+| `kubelease_leases_expired_total` | Counter |
+| `kubelease_renewals_total` | Counter |
+| `kubelease_cleanup_failures_total` | Counter |
+| `kubelease_provision_failures_total` | Counter |
+| `kubelease_warning_events_total` | Counter |
 
-| Metric | Type | Description |
-|---|---|---|
-| `kubelease_active_leases` | Gauge | Best-effort count of Active leases |
-| `kubelease_expired_leases_total` | Counter | Leases that reached TTL expiration |
-| `kubelease_cleanup_failures_total` | Counter | Failed cleanup attempts |
-| `kubelease_provision_failures_total` | Counter | Failed provisioning attempts |
-
-Controller-runtime workqueue / reconcile metrics are also exposed on the metrics endpoint.
+No high-cardinality labels (`lease_name`, `owner`, etc.).
 
 ## Security model
 
-- Least-privilege ClusterRole (leases, namespaces, quotas, limitranges, networkpolicies, events)
+- Least-privilege ClusterRole
 - Never manages `default`, `kube-system`, `kube-public`, `kube-node-lease`
-- Cleanup refuses namespaces that do not carry matching KubeLease labels
-- Leader election enabled in production manifests (`--leader-elect`)
-
-## Leader election
-
-Multiple controller replicas can run safely with leader election (enabled by default
-in `config/manager`). Only the leader reconciles.
-
-Local development without election:
-
-```bash
-go run ./cmd/main.go --leader-elect=false --metrics-bind-address=:8080 --metrics-secure=false
-```
-
-Production: keep `--leader-elect` enabled.
+- Cleanup requires matching lease name **and** UID annotation
+- Refuses to adopt Namespaces owned by a different lease
+- Leader election enabled in production manifests
 
 ## Development
 
 ```bash
-# Generate manifests and code
 make manifests generate
+make test          # unit + envtest
+make test-unit
+make test-integration
+make lint
+make cli
+make run           # controller against current kubeconfig
+```
 
-# Format / vet
-make fmt vet
+### Kind workflow
 
-# Unit + envtest
-make test
-
-# Run locally against the current kubeconfig context
+```bash
+kind create cluster --name kubelease-dev
 make install
 make run
-```
-
-### Testing with Kind
-
-```bash
-kind create cluster --name kubelease
-make docker-build IMG=kubelease:dev
-kind load docker-image kubelease:dev --name kubelease
-make deploy IMG=kubelease:dev
-kubectl apply -f config/samples/platform_v1alpha1_environmentlease.yaml
-kubectl get environmentleases -o wide
-kubectl get ns -l kubelease.io/lease=payment-api-pr-1842
-```
-
-### Example kubectl workflow
-
-```bash
-# Create
-kubectl apply -f config/samples/platform_v1alpha1_environmentlease.yaml
-
-# Inspect
-kubectl get envlease payment-api-pr-1842 -o yaml
-kubectl describe envlease payment-api-pr-1842
-
-# Delete (triggers finalizer cleanup of the Namespace)
-kubectl delete envlease payment-api-pr-1842
+# other terminal:
+make cli && export PATH="$PWD/bin:$PATH"
+kubectl kubelease create demo --ttl 30m --max-ttl 2h --owner hayk --cpu-request 1 --memory-request 1Gi --default-deny
+kubectl kubelease list
+kubectl kubelease extend demo --for 15m
+kubectl delete resourcequota kubelease-quota -n "$(kubectl get envlease demo -o jsonpath='{.status.namespace}')"
+# watch it recreate
+kubectl kubelease expire demo
 ```
 
 ## Roadmap
 
-Phase 1 (this release): CRD, controller, Namespace/Quota/LimitRange/NetworkPolicy,
-TTL expiration, finalizers, status/conditions, metrics, tests, CI.
-
-Later phases (not implemented yet):
-
-- Slack / GitHub integrations
-- Idle TTL / Prometheus activity detection
-- Admission webhooks and external lifecycle hooks
-- UI and kubectl plugin
-- Cloud provider integrations
-- Multi-cluster
+- Phase 3+: Slack / GitHub integrations, idle TTL, multi-cluster, UI
 
 ## Contributing
 

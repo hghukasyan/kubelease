@@ -89,6 +89,21 @@ func (in *EnvironmentLeaseList) DeepCopyObject() runtime.Object {
 func (in *EnvironmentLeaseSpec) DeepCopyInto(out *EnvironmentLeaseSpec) {
 	*out = *in
 	out.TTL = in.TTL
+	if in.MaxTTL != nil {
+		in, out := &in.MaxTTL, &out.MaxTTL
+		*out = new(metav1.Duration)
+		**out = **in
+	}
+	if in.Renewable != nil {
+		in, out := &in.Renewable, &out.Renewable
+		*out = new(bool)
+		**out = **in
+	}
+	if in.Warnings != nil {
+		in, out := &in.Warnings, &out.Warnings
+		*out = make([]metav1.Duration, len(*in))
+		copy(*out, *in)
+	}
 	out.Owner = in.Owner
 	in.Namespace.DeepCopyInto(&out.Namespace)
 	if in.Quota != nil {
@@ -128,6 +143,15 @@ func (in *EnvironmentLeaseStatus) DeepCopyInto(out *EnvironmentLeaseStatus) {
 	if in.ExpiresAt != nil {
 		in, out := &in.ExpiresAt, &out.ExpiresAt
 		*out = (*in).DeepCopy()
+	}
+	if in.MaximumExpiresAt != nil {
+		in, out := &in.MaximumExpiresAt, &out.MaximumExpiresAt
+		*out = (*in).DeepCopy()
+	}
+	if in.WarningsDelivered != nil {
+		in, out := &in.WarningsDelivered, &out.WarningsDelivered
+		*out = make([]string, len(*in))
+		copy(*out, *in)
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions

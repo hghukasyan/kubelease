@@ -53,11 +53,52 @@ func ValidateNamespaceSpec(spec platformv1alpha1.NamespaceSpec) error {
 	return nil
 }
 
+// OwnedByLease reports whether the Namespace is owned by the given lease UID.
+func OwnedByLease(ns *corev1.Namespace, leaseName, leaseUID string) bool {
+	if ns == nil {
+		return false
+	}
+	if !IsManagedByKubeLease(ns.Labels, leaseName) {
+		return false
+	}
+	if leaseUID == "" {
+		return true
+	}
+	return ns.Annotations[platformv1alpha1.AnnotationLeaseUID] == leaseUID
+}
+
+// CanAdoptNamespace reports whether an existing Namespace may be adopted.
+// Empty/unmanaged namespaces with matching name may be claimed; foreign
+// managed namespaces must not.
+func CanAdoptNamespace(ns *corev1.Namespace, leaseName, leaseUID string) bool {
+	if ns == nil {
+		return false
+	}
+	if IsProtectedNamespace(ns.Name) {
+		return false
+	}
+	if OwnedByLease(ns, leaseName, leaseUID) {
+		return true
+	}
+	// Refuse if managed by a different lease.
+	if ns.Labels[platformv1alpha1.LabelManagedBy] == platformv1alpha1.ManagedByValue {
+		other := ns.Labels[platformv1alpha1.LabelLease]
+		if other != "" && other != leaseName {
+			return false
+		}
+		otherUID := ns.Annotations[platformv1alpha1.AnnotationLeaseUID]
+		if otherUID != "" && otherUID != leaseUID {
+			return false
+		}
+	}
+	// Unmanaged namespace with the desired name: allow claim.
+	return ns.Labels[platformv1alpha1.LabelManagedBy] != platformv1alpha1.ManagedByValue ||
+		ns.Labels[platformv1alpha1.LabelLease] == leaseName
+}
+
 // DesiredNamespace builds the Namespace object for a lease.
-// Name must already be resolved (either fixed or previously generated) and
-// stored/passed via name. No OwnerReference is set: Namespace ownership is
-// tracked via labels and cleaned up with the EnvironmentLease finalizer.
-func DesiredNamespace(lease *platformv1alpha1.EnvironmentLease, name string) (*corev1.Namespace, error) {
+// No OwnerReference is set on Namespace.
+func DesiredNamespace(leaseObj *platformv1alpha1.EnvironmentLease, name string) (*corev1.Namespace, error) {
 	if name == "" {
 		return nil, fmt.Errorf("namespace name must not be empty")
 	}
@@ -65,11 +106,17 @@ func DesiredNamespace(lease *platformv1alpha1.EnvironmentLease, name string) (*c
 		return nil, fmt.Errorf("cannot manage protected namespace %q", name)
 	}
 
+	annotations := copyStringMap(leaseObj.Spec.Namespace.Annotations)
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[platformv1alpha1.AnnotationLeaseUID] = string(leaseObj.UID)
+
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
-			Labels:      MergeLabels(ManagedLabels(lease.Name), lease.Spec.Namespace.Labels),
-			Annotations: copyStringMap(lease.Spec.Namespace.Annotations),
+			Labels:      MergeLabels(ManagedLabels(leaseObj.Name), leaseObj.Spec.Namespace.Labels),
+			Annotations: annotations,
 		},
 	}
 	return ns, nil

@@ -32,6 +32,8 @@ const (
 	ManagedByValue = "kubelease"
 	// LabelLease links a managed resource back to its EnvironmentLease name.
 	LabelLease = "kubelease.io/lease"
+	// AnnotationLeaseUID binds a managed Namespace to a specific EnvironmentLease UID.
+	AnnotationLeaseUID = "kubelease.io/lease-uid"
 )
 
 // LeasePhase is a high-level lifecycle summary. Conditions are authoritative
@@ -51,9 +53,10 @@ const (
 
 // Condition types for EnvironmentLease.
 const (
-	ConditionReady              = "Ready"
-	ConditionEnvironmentCreated = "EnvironmentCreated"
-	ConditionCleanup            = "Cleanup"
+	ConditionReady    = "Ready"
+	ConditionExpiring = "Expiring"
+	ConditionCleanup  = "Cleanup"
+	ConditionDegraded = "Degraded"
 )
 
 // Condition reasons.
@@ -66,9 +69,12 @@ const (
 	ReasonNetworkPolicyCreationFailed = "NetworkPolicyCreationFailed"
 	ReasonInvalidConfiguration        = "InvalidConfiguration"
 	ReasonLeaseExpired                = "LeaseExpired"
+	ReasonLeaseExpiring               = "LeaseExpiring"
 	ReasonCleanupInProgress           = "CleanupInProgress"
 	ReasonCleanupComplete             = "CleanupComplete"
 	ReasonCleanupFailed               = "CleanupFailed"
+	ReasonRenewalRejected             = "RenewalRejected"
+	ReasonNamespaceAdoptRefused       = "NamespaceAdoptRefused"
 )
 
 // OwnerSpec identifies the human or team that owns the lease.
@@ -144,11 +150,33 @@ type NetworkPolicySpec struct {
 }
 
 // EnvironmentLeaseSpec defines the desired state of EnvironmentLease.
+//
+// Renewal model: extend a lease by increasing Spec.TTL. The controller derives
+// status.expiresAt = status.createdAt + spec.ttl and clamps it to
+// status.maximumExpiresAt (= createdAt + maxTTL). The CLI `extend` command
+// patches Spec.TTL; the controller independently enforces maxTTL and renewable.
 type EnvironmentLeaseSpec struct {
-	// TTL is how long the environment should exist after creation.
-	// Represented as a Kubernetes duration string (e.g. "8h", "30m").
+	// TTL is the requested lifetime from CreatedAt.
+	// Renewal increases this value so expiresAt moves forward.
 	// +kubebuilder:validation:Required
 	TTL metav1.Duration `json:"ttl"`
+
+	// MaxTTL is the absolute maximum lifetime from CreatedAt.
+	// If unset, defaults to TTL (no renewal headroom beyond the initial request
+	// unless MaxTTL is raised). Must be >= TTL when set.
+	// +optional
+	MaxTTL *metav1.Duration `json:"maxTTL,omitempty"`
+
+	// Renewable controls whether Spec.TTL may be increased to extend the lease.
+	// Defaults to true when omitted.
+	// +optional
+	Renewable *bool `json:"renewable,omitempty"`
+
+	// Warnings are durations before expiration at which LeaseExpiring events
+	// should be emitted (e.g. "1h", "15m"). Must be unique and > 0.
+	// +optional
+	// +listType=set
+	Warnings []metav1.Duration `json:"warnings,omitempty"`
 
 	// Owner identifies who requested the environment.
 	// +optional
@@ -171,6 +199,22 @@ type EnvironmentLeaseSpec struct {
 	NetworkPolicy *NetworkPolicySpec `json:"networkPolicy,omitempty"`
 }
 
+// IsRenewable returns whether the lease may be extended. Default true.
+func (s EnvironmentLeaseSpec) IsRenewable() bool {
+	if s.Renewable == nil {
+		return true
+	}
+	return *s.Renewable
+}
+
+// EffectiveMaxTTL returns MaxTTL if set, otherwise TTL.
+func (s EnvironmentLeaseSpec) EffectiveMaxTTL() metav1.Duration {
+	if s.MaxTTL != nil {
+		return *s.MaxTTL
+	}
+	return s.TTL
+}
+
 // EnvironmentLeaseStatus defines the observed state of EnvironmentLease.
 type EnvironmentLeaseStatus struct {
 	// Phase is a human-readable summary of the lease lifecycle.
@@ -182,15 +226,24 @@ type EnvironmentLeaseStatus struct {
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 
-	// CreatedAt is when the lease window started. Persisted so restarts do not
-	// reset the expiration clock.
+	// CreatedAt is when the lease window started. Initialized once from
+	// metadata.creationTimestamp and never reset on controller restart.
 	// +optional
 	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
 
-	// ExpiresAt is CreatedAt + Spec.TTL. Recalculated when Spec.TTL changes
-	// relative to the sticky CreatedAt.
+	// ExpiresAt is CreatedAt + Spec.TTL, clamped to MaximumExpiresAt.
 	// +optional
 	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+
+	// MaximumExpiresAt is CreatedAt + effective MaxTTL. Renewals cannot exceed this.
+	// +optional
+	MaximumExpiresAt *metav1.Time `json:"maximumExpiresAt,omitempty"`
+
+	// WarningsDelivered lists warning durations (canonical strings like "1h")
+	// for which a LeaseExpiring event has already been emitted.
+	// +optional
+	// +listType=set
+	WarningsDelivered []string `json:"warningsDelivered,omitempty"`
 
 	// ObservedGeneration is the most recent generation observed by the controller.
 	// +optional

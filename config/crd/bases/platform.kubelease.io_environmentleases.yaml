@@ -56,7 +56,13 @@ spec:
           metadata:
             type: object
           spec:
-            description: EnvironmentLeaseSpec defines the desired state of EnvironmentLease.
+            description: |-
+              EnvironmentLeaseSpec defines the desired state of EnvironmentLease.
+
+              Renewal model: extend a lease by increasing Spec.TTL. The controller derives
+              status.expiresAt = status.createdAt + spec.ttl and clamps it to
+              status.maximumExpiresAt (= createdAt + maxTTL). The CLI `extend` command
+              patches Spec.TTL; the controller independently enforces maxTTL and renewable.
             properties:
               limits:
                 description: Limits, if set, creates a LimitRange in the managed Namespace.
@@ -102,6 +108,12 @@ spec:
                       may request/limit.
                     type: object
                 type: object
+              maxTTL:
+                description: |-
+                  MaxTTL is the absolute maximum lifetime from CreatedAt.
+                  If unset, defaults to TTL (no renewal headroom beyond the initial request
+                  unless MaxTTL is raised). Must be >= TTL when set.
+                type: string
               namespace:
                 description: Namespace configures the managed Namespace.
                 properties:
@@ -171,11 +183,24 @@ spec:
                     description: Requests are summed into ResourceQuota hard as requests.<resource>.
                     type: object
                 type: object
+              renewable:
+                description: |-
+                  Renewable controls whether Spec.TTL may be increased to extend the lease.
+                  Defaults to true when omitted.
+                type: boolean
               ttl:
                 description: |-
-                  TTL is how long the environment should exist after creation.
-                  Represented as a Kubernetes duration string (e.g. "8h", "30m").
+                  TTL is the requested lifetime from CreatedAt.
+                  Renewal increases this value so expiresAt moves forward.
                 type: string
+              warnings:
+                description: |-
+                  Warnings are durations before expiration at which LeaseExpiring events
+                  should be emitted (e.g. "1h", "15m"). Must be unique and > 0.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
             required:
             - namespace
             - ttl
@@ -246,14 +271,17 @@ spec:
                 x-kubernetes-list-type: map
               createdAt:
                 description: |-
-                  CreatedAt is when the lease window started. Persisted so restarts do not
-                  reset the expiration clock.
+                  CreatedAt is when the lease window started. Initialized once from
+                  metadata.creationTimestamp and never reset on controller restart.
                 format: date-time
                 type: string
               expiresAt:
-                description: |-
-                  ExpiresAt is CreatedAt + Spec.TTL. Recalculated when Spec.TTL changes
-                  relative to the sticky CreatedAt.
+                description: ExpiresAt is CreatedAt + Spec.TTL, clamped to MaximumExpiresAt.
+                format: date-time
+                type: string
+              maximumExpiresAt:
+                description: MaximumExpiresAt is CreatedAt + effective MaxTTL. Renewals
+                  cannot exceed this.
                 format: date-time
                 type: string
               namespace:
@@ -277,6 +305,14 @@ spec:
                 - Expired
                 - Failed
                 type: string
+              warningsDelivered:
+                description: |-
+                  WarningsDelivered lists warning durations (canonical strings like "1h")
+                  for which a LeaseExpiring event has already been emitted.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
             type: object
         type: object
     served: true

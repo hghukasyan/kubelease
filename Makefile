@@ -58,8 +58,20 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet setup-envtest ## Run tests.
+test: manifests generate fmt vet setup-envtest ## Run unit + envtest suites.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+
+.PHONY: test-unit
+test-unit: ## Run unit tests only (no envtest).
+	go test ./internal/lease/ ./internal/resources/ ./internal/cli/ ./api/... -count=1
+
+.PHONY: test-integration
+test-integration: manifests generate setup-envtest ## Run envtest controller tests.
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./internal/controller/ -count=1
+
+.PHONY: cli
+cli: ## Build kubectl-kubelease into bin/
+	go build -o bin/kubectl-kubelease ./cmd/kubectl-kubelease
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
@@ -92,8 +104,9 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet ## Build manager binary.
+build: manifests generate fmt vet ## Build manager and CLI binaries.
 	go build -o bin/manager cmd/main.go
+	go build -o bin/kubectl-kubelease ./cmd/kubectl-kubelease
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.

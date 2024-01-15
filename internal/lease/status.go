@@ -22,22 +22,18 @@ import (
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
 )
 
-// StatusEqual reports whether two statuses are semantically equal for the
-// purpose of skipping unnecessary status writes.
+// StatusEqual reports whether two statuses are semantically equal for skipping
+// unnecessary status writes. LastTransitionTime is ignored.
 func StatusEqual(a, b platformv1alpha1.EnvironmentLeaseStatus) bool {
-	if a.Phase != b.Phase {
+	if a.Phase != b.Phase || a.Namespace != b.Namespace || a.ObservedGeneration != b.ObservedGeneration {
 		return false
 	}
-	if a.Namespace != b.Namespace {
+	if !timePtrEqual(a.CreatedAt, b.CreatedAt) ||
+		!timePtrEqual(a.ExpiresAt, b.ExpiresAt) ||
+		!timePtrEqual(a.MaximumExpiresAt, b.MaximumExpiresAt) {
 		return false
 	}
-	if a.ObservedGeneration != b.ObservedGeneration {
-		return false
-	}
-	if !timePtrEqual(a.CreatedAt, b.CreatedAt) {
-		return false
-	}
-	if !timePtrEqual(a.ExpiresAt, b.ExpiresAt) {
+	if !stringSliceEqual(a.WarningsDelivered, b.WarningsDelivered) {
 		return false
 	}
 	return conditionsEqual(a.Conditions, b.Conditions)
@@ -51,6 +47,18 @@ func timePtrEqual(a, b *metav1.Time) bool {
 		return false
 	}
 	return a.Equal(b)
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func conditionsEqual(a, b []metav1.Condition) bool {
@@ -85,6 +93,13 @@ func DeepCopyStatus(s platformv1alpha1.EnvironmentLeaseStatus) platformv1alpha1.
 		t := *s.ExpiresAt
 		out.ExpiresAt = &t
 	}
+	if s.MaximumExpiresAt != nil {
+		t := *s.MaximumExpiresAt
+		out.MaximumExpiresAt = &t
+	}
+	if s.WarningsDelivered != nil {
+		out.WarningsDelivered = append([]string{}, s.WarningsDelivered...)
+	}
 	if s.Conditions != nil {
 		out.Conditions = make([]metav1.Condition, len(s.Conditions))
 		copy(out.Conditions, s.Conditions)
@@ -93,6 +108,6 @@ func DeepCopyStatus(s platformv1alpha1.EnvironmentLeaseStatus) platformv1alpha1.
 }
 
 // EnsureObservedGeneration sets ObservedGeneration to the object's generation.
-func EnsureObservedGeneration(lease *platformv1alpha1.EnvironmentLease) {
-	lease.Status.ObservedGeneration = lease.Generation
+func EnsureObservedGeneration(leaseObj *platformv1alpha1.EnvironmentLease) {
+	leaseObj.Status.ObservedGeneration = leaseObj.Generation
 }

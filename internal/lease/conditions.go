@@ -17,81 +17,107 @@ limitations under the License.
 package lease
 
 import (
-	"time"
-
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
 )
 
-// SetCondition updates or adds a condition on the lease status.
+// SetCondition updates or adds a condition. LastTransitionTime only changes
+// when Status flips (handled by meta.SetStatusCondition).
 func SetCondition(
-	lease *platformv1alpha1.EnvironmentLease,
+	leaseObj *platformv1alpha1.EnvironmentLease,
 	condType string,
 	status metav1.ConditionStatus,
 	reason, message string,
 ) {
-	meta.SetStatusCondition(&lease.Status.Conditions, metav1.Condition{
+	meta.SetStatusCondition(&leaseObj.Status.Conditions, metav1.Condition{
 		Type:               condType,
 		Status:             status,
 		Reason:             reason,
 		Message:            message,
-		ObservedGeneration: lease.Generation,
-		LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+		ObservedGeneration: leaseObj.Generation,
 	})
 }
 
 // MarkProvisioning sets conditions for an environment still being created.
-func MarkProvisioning(lease *platformv1alpha1.EnvironmentLease, message string) {
-	lease.Status.Phase = platformv1alpha1.LeasePhaseProvisioning
-	SetCondition(lease, platformv1alpha1.ConditionReady, metav1.ConditionFalse,
+func MarkProvisioning(leaseObj *platformv1alpha1.EnvironmentLease, message string) {
+	leaseObj.Status.Phase = platformv1alpha1.LeasePhaseProvisioning
+	SetCondition(leaseObj, platformv1alpha1.ConditionReady, metav1.ConditionFalse,
 		platformv1alpha1.ReasonProvisioning, message)
-	SetCondition(lease, platformv1alpha1.ConditionEnvironmentCreated, metav1.ConditionFalse,
-		platformv1alpha1.ReasonProvisioning, message)
+	SetCondition(leaseObj, platformv1alpha1.ConditionExpiring, metav1.ConditionFalse,
+		platformv1alpha1.ReasonProvisioning, "Not yet active")
+	SetCondition(leaseObj, platformv1alpha1.ConditionCleanup, metav1.ConditionFalse,
+		platformv1alpha1.ReasonProvisioning, "Not cleaning")
+	SetCondition(leaseObj, platformv1alpha1.ConditionDegraded, metav1.ConditionFalse,
+		platformv1alpha1.ReasonProvisioning, "Provisioning")
 }
 
 // MarkReady sets conditions for a fully provisioned active environment.
-func MarkReady(lease *platformv1alpha1.EnvironmentLease) {
-	lease.Status.Phase = platformv1alpha1.LeasePhaseActive
-	SetCondition(lease, platformv1alpha1.ConditionReady, metav1.ConditionTrue,
+func MarkReady(leaseObj *platformv1alpha1.EnvironmentLease, expiring bool) {
+	if expiring {
+		leaseObj.Status.Phase = platformv1alpha1.LeasePhaseExpiring
+		SetCondition(leaseObj, platformv1alpha1.ConditionExpiring, metav1.ConditionTrue,
+			platformv1alpha1.ReasonLeaseExpiring, "Lease is approaching expiration")
+	} else {
+		leaseObj.Status.Phase = platformv1alpha1.LeasePhaseActive
+		SetCondition(leaseObj, platformv1alpha1.ConditionExpiring, metav1.ConditionFalse,
+			platformv1alpha1.ReasonEnvironmentReady, "Lease is not in warning window")
+	}
+	SetCondition(leaseObj, platformv1alpha1.ConditionReady, metav1.ConditionTrue,
 		platformv1alpha1.ReasonEnvironmentReady, "Environment successfully provisioned")
-	SetCondition(lease, platformv1alpha1.ConditionEnvironmentCreated, metav1.ConditionTrue,
-		platformv1alpha1.ReasonEnvironmentReady, "Managed environment resources are present")
+	SetCondition(leaseObj, platformv1alpha1.ConditionCleanup, metav1.ConditionFalse,
+		platformv1alpha1.ReasonEnvironmentReady, "Not cleaning")
+	SetCondition(leaseObj, platformv1alpha1.ConditionDegraded, metav1.ConditionFalse,
+		platformv1alpha1.ReasonEnvironmentReady, "Healthy")
 }
 
 // MarkFailed sets Failed phase and Ready=False with the given reason.
-func MarkFailed(lease *platformv1alpha1.EnvironmentLease, reason, message string) {
-	lease.Status.Phase = platformv1alpha1.LeasePhaseFailed
-	SetCondition(lease, platformv1alpha1.ConditionReady, metav1.ConditionFalse, reason, message)
+func MarkFailed(leaseObj *platformv1alpha1.EnvironmentLease, reason, message string) {
+	leaseObj.Status.Phase = platformv1alpha1.LeasePhaseFailed
+	SetCondition(leaseObj, platformv1alpha1.ConditionReady, metav1.ConditionFalse, reason, message)
+	SetCondition(leaseObj, platformv1alpha1.ConditionDegraded, metav1.ConditionTrue, reason, message)
 }
 
-// MarkExpired sets Expired/Expiring phase and Ready=False.
-func MarkExpired(lease *platformv1alpha1.EnvironmentLease) {
-	lease.Status.Phase = platformv1alpha1.LeasePhaseExpiring
-	SetCondition(lease, platformv1alpha1.ConditionReady, metav1.ConditionFalse,
+// MarkExpired sets Expiring/expired ready state before cleanup.
+func MarkExpired(leaseObj *platformv1alpha1.EnvironmentLease) {
+	leaseObj.Status.Phase = platformv1alpha1.LeasePhaseExpiring
+	SetCondition(leaseObj, platformv1alpha1.ConditionReady, metav1.ConditionFalse,
+		platformv1alpha1.ReasonLeaseExpired, "Lease TTL has elapsed")
+	SetCondition(leaseObj, platformv1alpha1.ConditionExpiring, metav1.ConditionTrue,
 		platformv1alpha1.ReasonLeaseExpired, "Lease TTL has elapsed")
 }
 
 // MarkCleaning sets Cleaning phase and Cleanup condition.
-func MarkCleaning(lease *platformv1alpha1.EnvironmentLease, message string) {
-	lease.Status.Phase = platformv1alpha1.LeasePhaseCleaning
-	SetCondition(lease, platformv1alpha1.ConditionCleanup, metav1.ConditionFalse,
+func MarkCleaning(leaseObj *platformv1alpha1.EnvironmentLease, message string) {
+	leaseObj.Status.Phase = platformv1alpha1.LeasePhaseCleaning
+	SetCondition(leaseObj, platformv1alpha1.ConditionCleanup, metav1.ConditionFalse,
 		platformv1alpha1.ReasonCleanupInProgress, message)
-	SetCondition(lease, platformv1alpha1.ConditionReady, metav1.ConditionFalse,
+	SetCondition(leaseObj, platformv1alpha1.ConditionReady, metav1.ConditionFalse,
 		platformv1alpha1.ReasonCleanupInProgress, message)
 }
 
-// MarkCleanupComplete marks cleanup finished (before finalizer removal).
-func MarkCleanupComplete(lease *platformv1alpha1.EnvironmentLease) {
-	lease.Status.Phase = platformv1alpha1.LeasePhaseExpired
-	SetCondition(lease, platformv1alpha1.ConditionCleanup, metav1.ConditionTrue,
+// MarkCleanupComplete marks cleanup finished.
+func MarkCleanupComplete(leaseObj *platformv1alpha1.EnvironmentLease) {
+	leaseObj.Status.Phase = platformv1alpha1.LeasePhaseExpired
+	SetCondition(leaseObj, platformv1alpha1.ConditionCleanup, metav1.ConditionTrue,
 		platformv1alpha1.ReasonCleanupComplete, "Managed environment cleaned up")
+	SetCondition(leaseObj, platformv1alpha1.ConditionExpiring, metav1.ConditionFalse,
+		platformv1alpha1.ReasonCleanupComplete, "Expired")
+	SetCondition(leaseObj, platformv1alpha1.ConditionDegraded, metav1.ConditionFalse,
+		platformv1alpha1.ReasonCleanupComplete, "Cleanup finished")
 }
 
-// MarkCleanupFailed records a cleanup failure.
-func MarkCleanupFailed(lease *platformv1alpha1.EnvironmentLease, message string) {
-	lease.Status.Phase = platformv1alpha1.LeasePhaseCleaning
-	SetCondition(lease, platformv1alpha1.ConditionCleanup, metav1.ConditionFalse,
+// MarkCleanupFailed records a cleanup failure (keep retrying).
+func MarkCleanupFailed(leaseObj *platformv1alpha1.EnvironmentLease, message string) {
+	leaseObj.Status.Phase = platformv1alpha1.LeasePhaseCleaning
+	SetCondition(leaseObj, platformv1alpha1.ConditionCleanup, metav1.ConditionFalse,
 		platformv1alpha1.ReasonCleanupFailed, message)
+	SetCondition(leaseObj, platformv1alpha1.ConditionDegraded, metav1.ConditionTrue,
+		platformv1alpha1.ReasonCleanupFailed, message)
+}
+
+// ConditionTrue reports whether a condition is True.
+func ConditionTrue(leaseObj *platformv1alpha1.EnvironmentLease, condType string) bool {
+	return meta.IsStatusConditionTrue(leaseObj.Status.Conditions, condType)
 }

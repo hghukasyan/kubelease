@@ -4,6 +4,12 @@ metadata:
   name: payment-api-pr-1842
 spec:
   ttl: 8h
+  maxTTL: 72h
+  renewable: true
+
+  warnings:
+    - 1h
+    - 15m
 
   owner:
     name: hayk

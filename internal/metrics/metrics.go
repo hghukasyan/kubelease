@@ -22,37 +22,52 @@ import (
 )
 
 var (
-	// ActiveLeases is the number of EnvironmentLeases currently in Active phase.
-	// Updated by the controller when status transitions occur.
-	ActiveLeases = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "kubelease_active_leases",
-		Help: "Number of EnvironmentLeases currently in Active phase",
+	// Leases is the number of EnvironmentLeases by phase.
+	// Label "phase" is bounded to the LeasePhase enum.
+	Leases = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubelease_leases",
+		Help: "Number of EnvironmentLeases by phase",
+	}, []string{"phase"})
+
+	LeasesCreatedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_leases_created_total",
+		Help: "Total EnvironmentLeases that reached Active for the first time",
 	})
 
-	// ExpiredLeasesTotal counts leases that have reached TTL expiration.
-	ExpiredLeasesTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "kubelease_expired_leases_total",
-		Help: "Total number of EnvironmentLeases that reached TTL expiration",
+	LeasesExpiredTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_leases_expired_total",
+		Help: "Total EnvironmentLeases that reached TTL expiration",
 	})
 
-	// CleanupFailuresTotal counts failed cleanup attempts.
+	RenewalsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_renewals_total",
+		Help: "Total successful lease renewals (expiresAt moved later)",
+	})
+
 	CleanupFailuresTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "kubelease_cleanup_failures_total",
-		Help: "Total number of failed environment cleanup attempts",
+		Help: "Total failed environment cleanup attempts",
 	})
 
-	// ProvisionFailuresTotal counts failed provisioning attempts.
 	ProvisionFailuresTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "kubelease_provision_failures_total",
-		Help: "Total number of failed environment provisioning attempts",
+		Help: "Total failed environment provisioning attempts",
+	})
+
+	WarningEventsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_warning_events_total",
+		Help: "Total LeaseExpiring warning events emitted",
 	})
 )
 
 func init() {
 	metrics.Registry.MustRegister(
-		ActiveLeases,
-		ExpiredLeasesTotal,
+		Leases,
+		LeasesCreatedTotal,
+		LeasesExpiredTotal,
+		RenewalsTotal,
 		CleanupFailuresTotal,
 		ProvisionFailuresTotal,
+		WarningEventsTotal,
 	)
 }

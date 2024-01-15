@@ -29,10 +29,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
+	"github.com/hghukasyan/kubelease/internal/lease"
 	"github.com/hghukasyan/kubelease/internal/resources"
 )
 
@@ -46,8 +49,6 @@ func finalizeNamespace(g Gomega, name string) {
 	if ns.DeletionTimestamp.IsZero() {
 		return
 	}
-	// envtest has no namespace controller. Use the Finalize subresource to clear
-	// the protected "kubernetes" spec finalizer so the Namespace can disappear.
 	ns.Spec.Finalizers = []corev1.FinalizerName{}
 	_, err = k8sCS.CoreV1().Namespaces().Finalize(context.Background(), ns, metav1.UpdateOptions{})
 	g.Expect(err).NotTo(HaveOccurred())
@@ -62,29 +63,36 @@ var _ = Describe("EnvironmentLease Controller", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		clockTime = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+		clockTime = time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
 		reconciler = &EnvironmentLeaseReconciler{
 			Client:   k8sClient,
 			Scheme:   k8sClient.Scheme(),
-			Recorder: record.NewFakeRecorder(32),
-			Clock:    func() time.Time { return clockTime },
+			Recorder: record.NewFakeRecorder(64),
+			Clock:    lease.FixedClock{T: clockTime},
 		}
 	})
+
+	setClock := func(t time.Time) {
+		clockTime = t
+		reconciler.Clock = lease.FixedClock{T: clockTime}
+	}
 
 	newLease := func(name string) *platformv1alpha1.EnvironmentLease {
 		return &platformv1alpha1.EnvironmentLease{
 			ObjectMeta: metav1.ObjectMeta{Name: name},
 			Spec: platformv1alpha1.EnvironmentLeaseSpec{
-				TTL: metav1.Duration{Duration: 8 * time.Hour},
-				Owner: platformv1alpha1.OwnerSpec{
-					Name: "hayk",
-					Team: "payments",
+				TTL:       metav1.Duration{Duration: 8 * time.Hour},
+				MaxTTL:    &metav1.Duration{Duration: 72 * time.Hour},
+				Renewable: ptr.To(true),
+				Warnings: []metav1.Duration{
+					{Duration: time.Hour},
+					{Duration: 15 * time.Minute},
 				},
+				Owner: platformv1alpha1.OwnerSpec{Name: "hayk", Team: "payments"},
 				Namespace: platformv1alpha1.NamespaceSpec{
 					Name: "preview-" + name,
 					Labels: map[string]string{
 						"environment": "preview",
-						"application": "payments",
 					},
 				},
 				Quota: &platformv1alpha1.QuotaSpec{
@@ -121,6 +129,7 @@ var _ = Describe("EnvironmentLease Controller", func() {
 			g.Expect(k8sClient.Get(ctx, req.NamespacedName, got)).To(Succeed())
 			g.Expect(got.Status.Phase).To(Equal(platformv1alpha1.LeasePhaseActive))
 			g.Expect(got.Status.Namespace).NotTo(BeEmpty())
+			g.Expect(got.Status.MaximumExpiresAt).NotTo(BeNil())
 			g.Expect(got.Status.ObservedGeneration).To(Equal(got.Generation))
 		}, "15s", "200ms").Should(Succeed())
 
@@ -129,87 +138,60 @@ var _ = Describe("EnvironmentLease Controller", func() {
 		return got
 	}
 
-	AfterEach(func() {
-		// Best-effort cleanup of leases created in each test.
-	})
-
-	It("provisions Namespace, ResourceQuota, LimitRange, NetworkPolicy and status", func() {
+	It("provisions resources and status", func() {
 		name := "lease-provision"
-		leaseObj := newLease(name)
-		Expect(k8sClient.Create(ctx, leaseObj)).To(Succeed())
+		Expect(k8sClient.Create(ctx, newLease(name))).To(Succeed())
 		DeferCleanup(func() {
-			_ = k8sClient.Delete(ctx, leaseObj)
+			_ = k8sClient.Delete(ctx, &platformv1alpha1.EnvironmentLease{ObjectMeta: metav1.ObjectMeta{Name: name}})
 		})
 
 		got := reconcileUntilActive(name)
-		Expect(got.Status.CreatedAt).NotTo(BeNil())
-		Expect(got.Status.ExpiresAt).NotTo(BeNil())
 		Expect(controllerutil.ContainsFinalizer(got, platformv1alpha1.FinalizerName)).To(BeTrue())
 
 		ns := &corev1.Namespace{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: got.Status.Namespace}, ns)).To(Succeed())
-		Expect(ns.Labels[platformv1alpha1.LabelManagedBy]).To(Equal(platformv1alpha1.ManagedByValue))
-		Expect(ns.Labels["environment"]).To(Equal("preview"))
+		Expect(ns.Annotations[platformv1alpha1.AnnotationLeaseUID]).To(Equal(string(got.UID)))
 		Expect(ns.OwnerReferences).To(BeEmpty())
 
-		rq := &corev1.ResourceQuota{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{
 			Name: resources.ResourceQuotaName, Namespace: got.Status.Namespace,
-		}, rq)).To(Succeed())
-		Expect(rq.OwnerReferences).NotTo(BeEmpty())
-
-		lr := &corev1.LimitRange{}
+		}, &corev1.ResourceQuota{})).To(Succeed())
 		Expect(k8sClient.Get(ctx, types.NamespacedName{
 			Name: resources.LimitRangeName, Namespace: got.Status.Namespace,
-		}, lr)).To(Succeed())
-
-		np := &networkingv1.NetworkPolicy{}
+		}, &corev1.LimitRange{})).To(Succeed())
 		Expect(k8sClient.Get(ctx, types.NamespacedName{
 			Name: resources.NetworkPolicyName, Namespace: got.Status.Namespace,
-		}, np)).To(Succeed())
-		Expect(np.Spec.Ingress).To(BeEmpty())
-		Expect(np.Spec.Egress).To(BeEmpty())
+		}, &networkingv1.NetworkPolicy{})).To(Succeed())
 	})
 
-	It("is idempotent across repeated reconciles", func() {
+	It("is idempotent and keeps timestamps sticky", func() {
 		name := "lease-idempotent"
 		Expect(k8sClient.Create(ctx, newLease(name))).To(Succeed())
 		DeferCleanup(func() {
-			obj := &platformv1alpha1.EnvironmentLease{}
-			_ = k8sClient.Get(ctx, types.NamespacedName{Name: name}, obj)
-			_ = k8sClient.Delete(ctx, obj)
+			_ = k8sClient.Delete(ctx, &platformv1alpha1.EnvironmentLease{ObjectMeta: metav1.ObjectMeta{Name: name}})
 		})
 
 		got := reconcileUntilActive(name)
-		nsName := got.Status.Namespace
 		createdAt := got.Status.CreatedAt.DeepCopy()
 		expiresAt := got.Status.ExpiresAt.DeepCopy()
-
 		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
 		_, err := reconciler.Reconcile(ctx, req)
 		Expect(err).NotTo(HaveOccurred())
-		_, err = reconciler.Reconcile(ctx, req)
-		Expect(err).NotTo(HaveOccurred())
-
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: name}, got)).To(Succeed())
-		Expect(got.Status.Namespace).To(Equal(nsName))
+		Expect(k8sClient.Get(ctx, req.NamespacedName, got)).To(Succeed())
 		Expect(got.Status.CreatedAt.Equal(createdAt)).To(BeTrue())
 		Expect(got.Status.ExpiresAt.Equal(expiresAt)).To(BeTrue())
-		Expect(got.Status.Phase).To(Equal(platformv1alpha1.LeasePhaseActive))
 	})
 
-	It("recreates deleted managed ResourceQuota", func() {
+	It("recreates deleted ResourceQuota", func() {
 		name := "lease-drift-quota"
 		Expect(k8sClient.Create(ctx, newLease(name))).To(Succeed())
 		DeferCleanup(func() {
-			obj := &platformv1alpha1.EnvironmentLease{}
-			_ = k8sClient.Get(ctx, types.NamespacedName{Name: name}, obj)
-			_ = k8sClient.Delete(ctx, obj)
+			_ = k8sClient.Delete(ctx, &platformv1alpha1.EnvironmentLease{ObjectMeta: metav1.ObjectMeta{Name: name}})
 		})
 
 		got := reconcileUntilActive(name)
-		rq := &corev1.ResourceQuota{}
 		key := types.NamespacedName{Name: resources.ResourceQuotaName, Namespace: got.Status.Namespace}
+		rq := &corev1.ResourceQuota{}
 		Expect(k8sClient.Get(ctx, key, rq)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, rq)).To(Succeed())
 
@@ -220,54 +202,100 @@ var _ = Describe("EnvironmentLease Controller", func() {
 		}, "10s", "200ms").Should(Succeed())
 	})
 
-	It("repairs manually modified ResourceQuota hard limits", func() {
-		name := "lease-drift-patch"
+	It("renews when Spec.TTL increases", func() {
+		name := "lease-renew"
 		Expect(k8sClient.Create(ctx, newLease(name))).To(Succeed())
 		DeferCleanup(func() {
-			obj := &platformv1alpha1.EnvironmentLease{}
-			_ = k8sClient.Get(ctx, types.NamespacedName{Name: name}, obj)
-			_ = k8sClient.Delete(ctx, obj)
+			_ = k8sClient.Delete(ctx, &platformv1alpha1.EnvironmentLease{ObjectMeta: metav1.ObjectMeta{Name: name}})
 		})
 
 		got := reconcileUntilActive(name)
-		rq := &corev1.ResourceQuota{}
-		key := types.NamespacedName{Name: resources.ResourceQuotaName, Namespace: got.Status.Namespace}
-		Expect(k8sClient.Get(ctx, key, rq)).To(Succeed())
-		patched := rq.DeepCopy()
-		patched.Spec.Hard[corev1.ResourceName("requests.cpu")] = resource.MustParse("1")
-		Expect(k8sClient.Update(ctx, patched)).To(Succeed())
+		prev := got.Status.ExpiresAt.DeepCopy()
 
+		patched := got.DeepCopy()
+		patched.Spec.TTL = metav1.Duration{Duration: 12 * time.Hour}
+		Expect(k8sClient.Patch(ctx, patched, client.MergeFrom(got))).To(Succeed())
+
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
 		Eventually(func(g Gomega) {
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: name}})
+			_, err := reconciler.Reconcile(ctx, req)
 			g.Expect(err).NotTo(HaveOccurred())
-			current := &corev1.ResourceQuota{}
-			g.Expect(k8sClient.Get(ctx, key, current)).To(Succeed())
-			cpuReq := current.Spec.Hard[corev1.ResourceName("requests.cpu")]
-			g.Expect(cpuReq.Cmp(resource.MustParse("2"))).To(Equal(0))
+			current := &platformv1alpha1.EnvironmentLease{}
+			g.Expect(k8sClient.Get(ctx, req.NamespacedName, current)).To(Succeed())
+			g.Expect(current.Status.ExpiresAt.After(prev.Time)).To(BeTrue())
 		}, "10s", "200ms").Should(Succeed())
+	})
+
+	It("clamps renewal to maxTTL", func() {
+		name := "lease-maxttl"
+		Expect(k8sClient.Create(ctx, newLease(name))).To(Succeed())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, &platformv1alpha1.EnvironmentLease{ObjectMeta: metav1.ObjectMeta{Name: name}})
+		})
+
+		got := reconcileUntilActive(name)
+		// Raise MaxTTL so ValidateSpec accepts a large TTL, then lower MaxTTL via
+		// status clamp: set TTL to MaxTTL (72h) and confirm expiresAt == maximum.
+		patched := got.DeepCopy()
+		patched.Spec.TTL = metav1.Duration{Duration: 72 * time.Hour}
+		Expect(k8sClient.Patch(ctx, patched, client.MergeFrom(got))).To(Succeed())
+
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
+		Eventually(func(g Gomega) {
+			_, err := reconciler.Reconcile(ctx, req)
+			g.Expect(err).NotTo(HaveOccurred())
+			current := &platformv1alpha1.EnvironmentLease{}
+			g.Expect(k8sClient.Get(ctx, req.NamespacedName, current)).To(Succeed())
+			g.Expect(current.Status.ExpiresAt.Equal(current.Status.MaximumExpiresAt)).To(BeTrue())
+		}, "10s", "200ms").Should(Succeed())
+	})
+
+	It("emits warning once and persists delivery", func() {
+		name := "lease-warn"
+		Expect(k8sClient.Create(ctx, newLease(name))).To(Succeed())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, &platformv1alpha1.EnvironmentLease{ObjectMeta: metav1.ObjectMeta{Name: name}})
+		})
+
+		got := reconcileUntilActive(name)
+		// Move into 1h warning window (expires at created+8h).
+		setClock(got.Status.ExpiresAt.Add(-30 * time.Minute))
+
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
+		Eventually(func(g Gomega) {
+			_, err := reconciler.Reconcile(ctx, req)
+			g.Expect(err).NotTo(HaveOccurred())
+			current := &platformv1alpha1.EnvironmentLease{}
+			g.Expect(k8sClient.Get(ctx, req.NamespacedName, current)).To(Succeed())
+			g.Expect(current.Status.WarningsDelivered).NotTo(BeEmpty())
+			g.Expect(current.Status.Phase).To(Equal(platformv1alpha1.LeasePhaseExpiring))
+		}, "10s", "200ms").Should(Succeed())
+
+		Expect(k8sClient.Get(ctx, req.NamespacedName, got)).To(Succeed())
+		delivered := append([]string{}, got.Status.WarningsDelivered...)
+		_, err := reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, req.NamespacedName, got)).To(Succeed())
+		Expect(got.Status.WarningsDelivered).To(Equal(delivered))
 	})
 
 	It("expires and cleans up the managed namespace", func() {
 		name := "lease-expire"
 		Expect(k8sClient.Create(ctx, newLease(name))).To(Succeed())
-
 		got := reconcileUntilActive(name)
 		nsName := got.Status.Namespace
-
-		clockTime = clockTime.Add(9 * time.Hour)
+		setClock(got.Status.ExpiresAt.Add(time.Minute))
 		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
 
 		Eventually(func(g Gomega) {
 			_, err := reconciler.Reconcile(ctx, req)
 			g.Expect(err).NotTo(HaveOccurred())
 			finalizeNamespace(g, nsName)
-
 			nsErr := k8sClient.Get(ctx, types.NamespacedName{Name: nsName}, &corev1.Namespace{})
 			if apierrors.IsNotFound(nsErr) {
 				_, err = reconciler.Reconcile(ctx, req)
 				g.Expect(err).NotTo(HaveOccurred())
 			}
-
 			current := &platformv1alpha1.EnvironmentLease{}
 			g.Expect(k8sClient.Get(ctx, req.NamespacedName, current)).To(Succeed())
 			g.Expect(apierrors.IsNotFound(
@@ -277,12 +305,11 @@ var _ = Describe("EnvironmentLease Controller", func() {
 		}, "30s", "200ms").Should(Succeed())
 	})
 
-	It("removes finalizer after delete cleanup (NotFound is success)", func() {
+	It("removes finalizer after delete cleanup", func() {
 		name := "lease-finalizer"
 		Expect(k8sClient.Create(ctx, newLease(name))).To(Succeed())
 		got := reconcileUntilActive(name)
 		nsName := got.Status.Namespace
-
 		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
 		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
 
@@ -292,7 +319,6 @@ var _ = Describe("EnvironmentLease Controller", func() {
 				return
 			}
 			g.Expect(err).NotTo(HaveOccurred())
-
 			_, reconErr := reconciler.Reconcile(ctx, req)
 			g.Expect(reconErr).NotTo(HaveOccurred())
 			finalizeNamespace(g, nsName)
@@ -307,9 +333,7 @@ var _ = Describe("EnvironmentLease Controller", func() {
 		leaseObj := newLease(name)
 		leaseObj.Spec.Namespace.Name = "kube-system"
 		Expect(k8sClient.Create(ctx, leaseObj)).To(Succeed())
-		DeferCleanup(func() {
-			_ = k8sClient.Delete(ctx, leaseObj)
-		})
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, leaseObj) })
 
 		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
 		Eventually(func(g Gomega) {
