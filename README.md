@@ -117,6 +117,38 @@ kubectl kubelease expire payment-pr
 `expire` deletes the `EnvironmentLease` CR. The controller finalizer performs cleanup.
 The CLI never deletes Namespaces directly.
 
+## EnvironmentLeasePolicy
+
+Reusable cluster-scoped policies provide defaults and hard limits:
+
+```yaml
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLeasePolicy
+metadata:
+  name: preview-default
+spec:
+  ttl:
+    default: 8h
+    maximum: 72h
+  quota:
+    maxCPU: "4"
+    maxMemory: 8Gi
+  networkPolicy:
+    defaultDenyRequired: true
+```
+
+Leases reference a policy with `spec.policyRef`. Omitted fields take policy
+defaults. Values that violate hard limits are **rejected** (status Failed /
+`PolicyViolation`) — they are never silently clamped.
+
+```yaml
+spec:
+  policyRef:
+    name: preview-default
+```
+
+`status.effective` records the resolved TTL, maxTTL, renewable, and defaultDeny.
+
 ## Installation (controller)
 
 ```bash

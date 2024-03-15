@@ -27,25 +27,16 @@ import (
 )
 
 // ValidateSpec performs controller-side defensive validation beyond CRD schema.
-func ValidateSpec(lease *platformv1alpha1.EnvironmentLease) error {
-	if err := ValidateTTL(lease.Spec.TTL); err != nil {
+// TTL/maxTTL/renewable/quota/networkPolicy are validated via policy.Resolve.
+func ValidateSpec(leaseObj *platformv1alpha1.EnvironmentLease) error {
+	if err := ValidateWarnings(leaseObj.Spec.Warnings); err != nil {
 		return err
 	}
-	maxTTL := lease.Spec.EffectiveMaxTTL()
-	if err := ValidateTTL(maxTTL); err != nil {
-		return fmt.Errorf("maxTTL: %w", err)
-	}
-	if maxTTL.Duration < lease.Spec.TTL.Duration {
-		return fmt.Errorf("maxTTL (%s) must be >= ttl (%s)", maxTTL.Duration, lease.Spec.TTL.Duration)
-	}
-	if err := ValidateWarnings(lease.Spec.Warnings); err != nil {
+	if err := resources.ValidateNamespaceSpec(leaseObj.Spec.Namespace); err != nil {
 		return err
 	}
-	if err := resources.ValidateNamespaceSpec(lease.Spec.Namespace); err != nil {
-		return err
-	}
-	if lease.Status.Namespace != "" && resources.IsProtectedNamespace(lease.Status.Namespace) {
-		return fmt.Errorf("cannot manage protected namespace %q", lease.Status.Namespace)
+	if leaseObj.Status.Namespace != "" && resources.IsProtectedNamespace(leaseObj.Status.Namespace) {
+		return fmt.Errorf("cannot manage protected namespace %q", leaseObj.Status.Namespace)
 	}
 	return nil
 }
@@ -73,21 +64,24 @@ func ValidateWarnings(warnings []metav1.Duration) error {
 	return nil
 }
 
-// EnsureTimestamps sets CreatedAt (once), MaximumExpiresAt, and ExpiresAt.
-//
-// CreatedAt is initialized from metadata.creationTimestamp when available.
-// ExpiresAt = CreatedAt + TTL, clamped to MaximumExpiresAt.
-// When renewable is false, ExpiresAt is not allowed to move later than the
-// previously observed ExpiresAt (controller-enforced renewal guard).
+// EnsureTimestamps sets CreatedAt (once), MaximumExpiresAt, and ExpiresAt using
+// already-resolved effective TTL/maxTTL/renewable values.
 //
 // Returns (changed, renewalRejected, error).
-func EnsureTimestamps(leaseObj *platformv1alpha1.EnvironmentLease, now time.Time) (bool, bool, error) {
-	if err := ValidateTTL(leaseObj.Spec.TTL); err != nil {
-		return false, false, err
+func EnsureTimestamps(
+	leaseObj *platformv1alpha1.EnvironmentLease,
+	ttl, maxTTL time.Duration,
+	renewable bool,
+	now time.Time,
+) (bool, bool, error) {
+	if ttl <= 0 {
+		return false, false, fmt.Errorf("ttl must be greater than zero")
 	}
-	maxTTL := leaseObj.Spec.EffectiveMaxTTL()
-	if err := ValidateTTL(maxTTL); err != nil {
-		return false, false, fmt.Errorf("maxTTL: %w", err)
+	if maxTTL <= 0 {
+		return false, false, fmt.Errorf("maxTTL must be greater than zero")
+	}
+	if maxTTL < ttl {
+		return false, false, fmt.Errorf("maxTTL (%s) must be >= ttl (%s)", maxTTL, ttl)
 	}
 
 	changed := false
@@ -103,27 +97,21 @@ func EnsureTimestamps(leaseObj *platformv1alpha1.EnvironmentLease, now time.Time
 		changed = true
 	}
 
-	maxExp := metav1.NewTime(leaseObj.Status.CreatedAt.Time.Add(maxTTL.Duration))
+	maxExp := metav1.NewTime(leaseObj.Status.CreatedAt.Time.Add(maxTTL))
 	if leaseObj.Status.MaximumExpiresAt == nil || !leaseObj.Status.MaximumExpiresAt.Equal(&maxExp) {
 		leaseObj.Status.MaximumExpiresAt = &maxExp
 		changed = true
 	}
 
-	ttl := leaseObj.Spec.TTL.Duration
-	if ttl > maxTTL.Duration {
-		ttl = maxTTL.Duration
-	}
 	desired := leaseObj.Status.CreatedAt.Time.Add(ttl)
 
-	// Non-renewable: refuse moving expiresAt later than previously accepted.
-	if !leaseObj.Spec.IsRenewable() && leaseObj.Status.ExpiresAt != nil && desired.After(leaseObj.Status.ExpiresAt.Time) {
+	if !renewable && leaseObj.Status.ExpiresAt != nil && desired.After(leaseObj.Status.ExpiresAt.Time) {
 		desired = leaseObj.Status.ExpiresAt.Time
 		renewalRejected = true
 	}
 
 	desiredMeta := metav1.NewTime(desired)
 	if leaseObj.Status.ExpiresAt == nil || !leaseObj.Status.ExpiresAt.Equal(&desiredMeta) {
-		// Detect renewal (expiresAt moved later while renewable).
 		leaseObj.Status.ExpiresAt = &desiredMeta
 		changed = true
 	}
@@ -139,8 +127,7 @@ func IsExpired(leaseObj *platformv1alpha1.EnvironmentLease, now time.Time) bool 
 	return !now.Before(leaseObj.Status.ExpiresAt.Time)
 }
 
-// IsExpiringWindow reports whether we are inside the earliest undelivered
-// warning window (or any warning window) before expiration.
+// IsExpiringWindow reports whether we are inside the largest warning window.
 func IsExpiringWindow(leaseObj *platformv1alpha1.EnvironmentLease, now time.Time) bool {
 	if leaseObj.Status.ExpiresAt == nil || IsExpired(leaseObj, now) {
 		return false

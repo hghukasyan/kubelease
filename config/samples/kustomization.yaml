@@ -2,4 +2,5 @@
 resources:
 - platform_v1alpha1_environmentlease.yaml
 - platform_v1alpha1_environmentlease_fixed.yaml
+- platform_v1alpha1_environmentleasepolicy.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

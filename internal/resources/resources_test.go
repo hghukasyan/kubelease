@@ -18,6 +18,7 @@ package resources
 
 import (
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -31,7 +32,7 @@ func sampleLease() *platformv1alpha1.EnvironmentLease {
 	return &platformv1alpha1.EnvironmentLease{
 		ObjectMeta: metav1.ObjectMeta{Name: "payment-api-pr-1842"},
 		Spec: platformv1alpha1.EnvironmentLeaseSpec{
-			TTL: metav1.Duration{Duration: 0}, // unused in builders
+			TTL: &metav1.Duration{Duration: 8 * time.Hour}, // unused in builders
 			Namespace: platformv1alpha1.NamespaceSpec{
 				GenerateName: "preview-",
 				Labels: map[string]string{

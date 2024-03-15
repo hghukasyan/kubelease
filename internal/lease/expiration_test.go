@@ -43,12 +43,8 @@ func TestEnsureTimestampsStickyAndMaxTTL(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			CreationTimestamp: metav1.NewTime(now.Add(-time.Minute)),
 		},
-		Spec: platformv1alpha1.EnvironmentLeaseSpec{
-			TTL:    metav1.Duration{Duration: 8 * time.Hour},
-			MaxTTL: &metav1.Duration{Duration: 72 * time.Hour},
-		},
 	}
-	changed, rejected, err := EnsureTimestamps(leaseObj, now)
+	changed, rejected, err := EnsureTimestamps(leaseObj, 8*time.Hour, 72*time.Hour, true, now)
 	if err != nil || rejected || !changed {
 		t.Fatalf("changed=%v rejected=%v err=%v", changed, rejected, err)
 	}
@@ -60,8 +56,7 @@ func TestEnsureTimestampsStickyAndMaxTTL(t *testing.T) {
 		t.Fatalf("max=%v want %v", leaseObj.Status.MaximumExpiresAt, wantMax)
 	}
 
-	// Restart: sticky
-	_, _, err = EnsureTimestamps(leaseObj, now.Add(2*time.Hour))
+	_, _, err = EnsureTimestamps(leaseObj, 8*time.Hour, 72*time.Hour, true, now.Add(2*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,30 +65,15 @@ func TestEnsureTimestampsStickyAndMaxTTL(t *testing.T) {
 	}
 }
 
-func TestEnsureTimestampsClampsToMaxTTL(t *testing.T) {
+func TestEnsureTimestampsRejectsTTLAboveMaxTTL(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
 	leaseObj := &platformv1alpha1.EnvironmentLease{
 		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(now)},
-		Spec: platformv1alpha1.EnvironmentLeaseSpec{
-			TTL:    metav1.Duration{Duration: 100 * time.Hour},
-			MaxTTL: &metav1.Duration{Duration: 72 * time.Hour},
-		},
 	}
-	// Spec invalid for ValidateSpec but EnsureTimestamps still clamps if called with ttl>max
-	// First fix: ValidateSpec would reject. Test clamp path with valid then raise ttl.
-	leaseObj.Spec.TTL = metav1.Duration{Duration: 8 * time.Hour}
-	_, _, err := EnsureTimestamps(leaseObj, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaseObj.Spec.TTL = metav1.Duration{Duration: 100 * time.Hour}
-	_, _, err = EnsureTimestamps(leaseObj, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !leaseObj.Status.ExpiresAt.Equal(leaseObj.Status.MaximumExpiresAt) {
-		t.Fatal("expiresAt should clamp to maximumExpiresAt")
+	_, _, err := EnsureTimestamps(leaseObj, 100*time.Hour, 72*time.Hour, true, now)
+	if err == nil {
+		t.Fatal("expected error when ttl exceeds maxTTL")
 	}
 }
 
@@ -102,19 +82,14 @@ func TestEnsureTimestampsNonRenewableRejectsExtension(t *testing.T) {
 	now := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
 	leaseObj := &platformv1alpha1.EnvironmentLease{
 		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(now)},
-		Spec: platformv1alpha1.EnvironmentLeaseSpec{
-			TTL:       metav1.Duration{Duration: 8 * time.Hour},
-			MaxTTL:    &metav1.Duration{Duration: 72 * time.Hour},
-			Renewable: ptr.To(false),
-		},
+		Spec:       platformv1alpha1.EnvironmentLeaseSpec{Renewable: ptr.To(false)},
 	}
-	_, _, err := EnsureTimestamps(leaseObj, now)
+	_, _, err := EnsureTimestamps(leaseObj, 8*time.Hour, 72*time.Hour, false, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	prev := *leaseObj.Status.ExpiresAt
-	leaseObj.Spec.TTL = metav1.Duration{Duration: 12 * time.Hour}
-	_, rejected, err := EnsureTimestamps(leaseObj, now)
+	_, rejected, err := EnsureTimestamps(leaseObj, 12*time.Hour, 72*time.Hour, false, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +123,6 @@ func TestComputeExtendedTTL(t *testing.T) {
 		t.Fatal("expected not renewable error")
 	}
 
-	// Cap at max
 	nearMax := maxExp.Add(-time.Hour)
 	_, capped, err := ComputeExtendedTTL(created, nearMax, maxExp, 4*time.Hour, true)
 	if err != nil {
@@ -194,7 +168,6 @@ func TestPendingWarningsAndSchedule(t *testing.T) {
 		t.Fatalf("requeue=%s want 15m", got)
 	}
 
-	// After restart with both delivered, no re-fire
 	pending = PendingWarnings(now, expires, warnings, delivered)
 	if len(pending) != 0 {
 		t.Fatalf("expected no pending, got %v", pending)

@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -68,6 +70,8 @@ const (
 	ReasonLimitRangeCreationFailed    = "LimitRangeCreationFailed"
 	ReasonNetworkPolicyCreationFailed = "NetworkPolicyCreationFailed"
 	ReasonInvalidConfiguration        = "InvalidConfiguration"
+	ReasonPolicyViolation             = "PolicyViolation"
+	ReasonPolicyNotFound              = "PolicyNotFound"
 	ReasonLeaseExpired                = "LeaseExpired"
 	ReasonLeaseExpiring               = "LeaseExpiring"
 	ReasonCleanupInProgress           = "CleanupInProgress"
@@ -76,6 +80,13 @@ const (
 	ReasonRenewalRejected             = "RenewalRejected"
 	ReasonNamespaceAdoptRefused       = "NamespaceAdoptRefused"
 )
+
+// LocalObjectReference identifies a cluster-scoped policy by name.
+type LocalObjectReference struct {
+	// Name of the referent.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+}
 
 // OwnerSpec identifies the human or team that owns the lease.
 type OwnerSpec struct {
@@ -152,23 +163,34 @@ type NetworkPolicySpec struct {
 // EnvironmentLeaseSpec defines the desired state of EnvironmentLease.
 //
 // Renewal model: extend a lease by increasing Spec.TTL. The controller derives
-// status.expiresAt = status.createdAt + spec.ttl and clamps it to
-// status.maximumExpiresAt (= createdAt + maxTTL). The CLI `extend` command
-// patches Spec.TTL; the controller independently enforces maxTTL and renewable.
+// status.expiresAt = status.createdAt + effectiveTTL and clamps it to
+// status.maximumExpiresAt (= createdAt + effectiveMaxTTL).
+//
+// When PolicyRef is set, omitted fields take policy defaults. Values that
+// violate policy hard limits are rejected (not silently clamped).
 type EnvironmentLeaseSpec struct {
+	// PolicyRef references a cluster-scoped EnvironmentLeasePolicy.
+	// +optional
+	PolicyRef *LocalObjectReference `json:"policyRef,omitempty"`
+
 	// TTL is the requested lifetime from CreatedAt.
-	// Renewal increases this value so expiresAt moves forward.
-	// +kubebuilder:validation:Required
-	TTL metav1.Duration `json:"ttl"`
+	// Optional when PolicyRef provides ttl.default; otherwise required.
+	// +optional
+	TTL *metav1.Duration `json:"ttl,omitempty"`
 
 	// MaxTTL is the absolute maximum lifetime from CreatedAt.
-	// If unset, defaults to TTL (no renewal headroom beyond the initial request
-	// unless MaxTTL is raised). Must be >= TTL when set.
+	// If unset, defaults to effective TTL (or policy maxTTL/ttl.maximum).
 	// +optional
 	MaxTTL *metav1.Duration `json:"maxTTL,omitempty"`
 
+	// IdleTTL is the inactivity window before an idle environment may expire.
+	// Enforcement of idle detection is a later phase; the field is resolved
+	// and validated against policy now.
+	// +optional
+	IdleTTL *metav1.Duration `json:"idleTTL,omitempty"`
+
 	// Renewable controls whether Spec.TTL may be increased to extend the lease.
-	// Defaults to true when omitted.
+	// Defaults to true when omitted (unless policy forces otherwise).
 	// +optional
 	Renewable *bool `json:"renewable,omitempty"`
 
@@ -200,6 +222,7 @@ type EnvironmentLeaseSpec struct {
 }
 
 // IsRenewable returns whether the lease may be extended. Default true.
+// Prefer ResolvedConfig.Renewable after policy resolution.
 func (s EnvironmentLeaseSpec) IsRenewable() bool {
 	if s.Renewable == nil {
 		return true
@@ -207,12 +230,12 @@ func (s EnvironmentLeaseSpec) IsRenewable() bool {
 	return *s.Renewable
 }
 
-// EffectiveMaxTTL returns MaxTTL if set, otherwise TTL.
-func (s EnvironmentLeaseSpec) EffectiveMaxTTL() metav1.Duration {
-	if s.MaxTTL != nil {
-		return *s.MaxTTL
+// RequestedTTL returns the explicitly requested TTL, or zero if unset.
+func (s EnvironmentLeaseSpec) RequestedTTL() time.Duration {
+	if s.TTL == nil {
+		return 0
 	}
-	return s.TTL
+	return s.TTL.Duration
 }
 
 // EnvironmentLeaseStatus defines the observed state of EnvironmentLease.
@@ -245,6 +268,10 @@ type EnvironmentLeaseStatus struct {
 	// +listType=set
 	WarningsDelivered []string `json:"warningsDelivered,omitempty"`
 
+	// Effective holds the policy-resolved values used for reconciliation.
+	// +optional
+	Effective *EffectiveLeaseSpec `json:"effective,omitempty"`
+
 	// ObservedGeneration is the most recent generation observed by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
@@ -254,6 +281,29 @@ type EnvironmentLeaseStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// EffectiveLeaseSpec records the resolved lease parameters after policy application.
+type EffectiveLeaseSpec struct {
+	// PolicyName is the referenced policy, if any.
+	// +optional
+	PolicyName string `json:"policyName,omitempty"`
+
+	// TTL is the effective lease TTL.
+	TTL metav1.Duration `json:"ttl"`
+
+	// MaxTTL is the effective maximum lifetime.
+	MaxTTL metav1.Duration `json:"maxTTL"`
+
+	// IdleTTL is the effective idle TTL when configured.
+	// +optional
+	IdleTTL *metav1.Duration `json:"idleTTL,omitempty"`
+
+	// Renewable is the effective renewability.
+	Renewable bool `json:"renewable"`
+
+	// DefaultDeny is whether default-deny NetworkPolicy is effective.
+	DefaultDeny bool `json:"defaultDeny"`
 }
 
 // +kubebuilder:object:root=true

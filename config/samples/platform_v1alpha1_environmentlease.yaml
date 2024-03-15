@@ -1,8 +1,31 @@
 apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLeasePolicy
+metadata:
+  name: preview-default
+spec:
+  ttl:
+    default: 8h
+    maximum: 72h
+  maxTTL:
+    default: 72h
+    maximum: 72h
+  renewable:
+    default: true
+  quota:
+    maxCPU: "4"
+    maxMemory: 8Gi
+  networkPolicy:
+    defaultDenyRequired: true
+---
+apiVersion: platform.kubelease.io/v1alpha1
 kind: EnvironmentLease
 metadata:
   name: payment-api-pr-1842
 spec:
+  policyRef:
+    name: preview-default
+
+  # Optional overrides (must satisfy policy hard limits)
   ttl: 8h
   maxTTL: 72h
   renewable: true

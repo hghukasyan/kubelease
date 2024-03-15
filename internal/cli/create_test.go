@@ -42,7 +42,7 @@ func TestBuildLease(t *testing.T) {
 	if leaseObj.Name != "payment-pr" {
 		t.Fatal(leaseObj.Name)
 	}
-	if leaseObj.Spec.TTL.Duration != 8*time.Hour {
+	if leaseObj.Spec.TTL == nil || leaseObj.Spec.TTL.Duration != 8*time.Hour {
 		t.Fatal(leaseObj.Spec.TTL)
 	}
 	if leaseObj.Spec.MaxTTL == nil || leaseObj.Spec.MaxTTL.Duration != 72*time.Hour {

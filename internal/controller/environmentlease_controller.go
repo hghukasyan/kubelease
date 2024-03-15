@@ -41,12 +41,14 @@ import (
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
 	"github.com/hghukasyan/kubelease/internal/lease"
 	"github.com/hghukasyan/kubelease/internal/metrics"
+	"github.com/hghukasyan/kubelease/internal/policy"
 	"github.com/hghukasyan/kubelease/internal/resources"
 )
 
 const (
 	cleanupRequeueAfter  = 5 * time.Second
 	indexStatusNamespace = ".status.namespace"
+	indexPolicyRefName   = ".spec.policyRef.name"
 
 	eventEnvironmentReady = "EnvironmentProvisioned"
 	eventLeaseRenewed     = "LeaseRenewed"
@@ -75,6 +77,7 @@ func (r *EnvironmentLeaseReconciler) now() time.Time {
 // +kubebuilder:rbac:groups=platform.kubelease.io,resources=environmentleases,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=platform.kubelease.io,resources=environmentleases/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=platform.kubelease.io,resources=environmentleases/finalizers,verbs=update
+// +kubebuilder:rbac:groups=platform.kubelease.io,resources=environmentleasepolicies,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=resourcequotas,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=limitranges,verbs=get;list;watch;create;update;patch;delete
@@ -122,7 +125,31 @@ func (r *EnvironmentLeaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
-	_, renewalRejected, err := lease.EnsureTimestamps(leaseObj, r.now())
+	pol, err := r.fetchPolicy(ctx, leaseObj)
+	if err != nil {
+		reason := platformv1alpha1.ReasonPolicyNotFound
+		lease.MarkFailed(leaseObj, reason, err.Error())
+		lease.EnsureObservedGeneration(leaseObj)
+		if patchErr := r.patchStatusIfChanged(ctx, leaseObj, before); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		metrics.ProvisionFailuresTotal.Inc()
+		return ctrl.Result{}, nil
+	}
+
+	resolved, err := policy.Resolve(leaseObj.Spec, pol)
+	if err != nil {
+		lease.MarkFailed(leaseObj, platformv1alpha1.ReasonPolicyViolation, err.Error())
+		lease.EnsureObservedGeneration(leaseObj)
+		if patchErr := r.patchStatusIfChanged(ctx, leaseObj, before); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		metrics.ProvisionFailuresTotal.Inc()
+		return ctrl.Result{}, nil
+	}
+	leaseObj.Status.Effective = resolved.ToEffectiveStatus()
+
+	_, renewalRejected, err := lease.EnsureTimestamps(leaseObj, resolved.TTL, resolved.MaxTTL, resolved.Renewable, r.now())
 	if err != nil {
 		lease.MarkFailed(leaseObj, platformv1alpha1.ReasonInvalidConfiguration, err.Error())
 		lease.EnsureObservedGeneration(leaseObj)
@@ -139,7 +166,7 @@ func (r *EnvironmentLeaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Detect renewal for events/metrics (expiresAt moved later).
 	if previousExpires != nil && leaseObj.Status.ExpiresAt != nil &&
 		leaseObj.Status.ExpiresAt.After(*previousExpires) &&
-		leaseObj.Spec.IsRenewable() {
+		resolved.Renewable {
 		metrics.RenewalsTotal.Inc()
 		if r.Recorder != nil {
 			r.Recorder.Eventf(leaseObj, corev1.EventTypeNormal, eventLeaseRenewed,
@@ -151,7 +178,7 @@ func (r *EnvironmentLeaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return r.reconcileExpired(ctx, leaseObj, before, previousPhase)
 	}
 
-	result, err := r.reconcileActive(ctx, leaseObj, previousPhase)
+	result, err := r.reconcileActive(ctx, leaseObj, previousPhase, resolved)
 	lease.EnsureObservedGeneration(leaseObj)
 	if patchErr := r.patchStatusIfChanged(ctx, leaseObj, before); patchErr != nil {
 		return ctrl.Result{}, patchErr
@@ -163,10 +190,25 @@ func (r *EnvironmentLeaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	return result, nil
 }
 
+func (r *EnvironmentLeaseReconciler) fetchPolicy(
+	ctx context.Context,
+	leaseObj *platformv1alpha1.EnvironmentLease,
+) (*platformv1alpha1.EnvironmentLeasePolicy, error) {
+	if leaseObj.Spec.PolicyRef == nil || leaseObj.Spec.PolicyRef.Name == "" {
+		return nil, nil
+	}
+	pol := &platformv1alpha1.EnvironmentLeasePolicy{}
+	if err := r.Get(ctx, types.NamespacedName{Name: leaseObj.Spec.PolicyRef.Name}, pol); err != nil {
+		return nil, fmt.Errorf("get EnvironmentLeasePolicy %q: %w", leaseObj.Spec.PolicyRef.Name, err)
+	}
+	return pol, nil
+}
+
 func (r *EnvironmentLeaseReconciler) reconcileActive(
 	ctx context.Context,
 	leaseObj *platformv1alpha1.EnvironmentLease,
 	previousPhase platformv1alpha1.LeasePhase,
+	resolved policy.Resolved,
 ) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
 	wasReady := lease.ConditionTrue(leaseObj, platformv1alpha1.ConditionReady)
@@ -175,6 +217,13 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 	// unless we are starting fresh.
 	if !wasReady && leaseObj.Status.Phase != platformv1alpha1.LeasePhaseFailed {
 		lease.MarkProvisioning(leaseObj, "Provisioning managed environment")
+	}
+
+	// Working copy carries policy-resolved NetworkPolicy for desired builders
+	// without mutating the user's Spec.
+	working := leaseObj.DeepCopy()
+	if resolved.NetworkPolicy != nil {
+		working.Spec.NetworkPolicy = resolved.NetworkPolicy
 	}
 
 	nsName, created, err := r.ensureNamespace(ctx, leaseObj)
@@ -193,22 +242,23 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 		if err := r.Get(ctx, client.ObjectKeyFromObject(leaseObj), leaseObj); err != nil {
 			return ctrl.Result{}, err
 		}
+		leaseObj.Status.Effective = resolved.ToEffectiveStatus()
 	}
 	if created {
 		log.Info("provisioning environment", "lease", leaseObj.Name, "namespace", nsName)
 	}
 
-	if err := r.ensureResourceQuota(ctx, leaseObj, nsName); err != nil {
+	if err := r.ensureResourceQuota(ctx, working, nsName); err != nil {
 		lease.MarkFailed(leaseObj, platformv1alpha1.ReasonResourceQuotaCreationFailed, err.Error())
 		metrics.ProvisionFailuresTotal.Inc()
 		return ctrl.Result{}, err
 	}
-	if err := r.ensureLimitRange(ctx, leaseObj, nsName); err != nil {
+	if err := r.ensureLimitRange(ctx, working, nsName); err != nil {
 		lease.MarkFailed(leaseObj, platformv1alpha1.ReasonLimitRangeCreationFailed, err.Error())
 		metrics.ProvisionFailuresTotal.Inc()
 		return ctrl.Result{}, err
 	}
-	if err := r.ensureNetworkPolicy(ctx, leaseObj, nsName); err != nil {
+	if err := r.ensureNetworkPolicy(ctx, working, nsName); err != nil {
 		lease.MarkFailed(leaseObj, platformv1alpha1.ReasonNetworkPolicyCreationFailed, err.Error())
 		metrics.ProvisionFailuresTotal.Inc()
 		return ctrl.Result{}, err
@@ -676,15 +726,41 @@ func (r *EnvironmentLeaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index status.namespace: %w", err)
 	}
 
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&platformv1alpha1.EnvironmentLease{},
+		indexPolicyRefName,
+		func(obj client.Object) []string {
+			l := obj.(*platformv1alpha1.EnvironmentLease)
+			if l.Spec.PolicyRef == nil || l.Spec.PolicyRef.Name == "" {
+				return nil
+			}
+			return []string{l.Spec.PolicyRef.Name}
+		},
+	); err != nil {
+		return fmt.Errorf("index spec.policyRef.name: %w", err)
+	}
+
 	mapNamespace := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 		labels := obj.GetLabels()
 		leaseName := labels[platformv1alpha1.LabelLease]
 		if leaseName != "" && labels[platformv1alpha1.LabelManagedBy] == platformv1alpha1.ManagedByValue {
 			return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: leaseName}}}
 		}
-		// Fallback: field index by namespace name.
 		var list platformv1alpha1.EnvironmentLeaseList
 		if err := r.List(ctx, &list, client.MatchingFields{indexStatusNamespace: obj.GetName()}); err != nil {
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0, len(list.Items))
+		for i := range list.Items {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: list.Items[i].Name}})
+		}
+		return reqs
+	})
+
+	mapPolicy := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var list platformv1alpha1.EnvironmentLeaseList
+		if err := r.List(ctx, &list, client.MatchingFields{indexPolicyRefName: obj.GetName()}); err != nil {
 			return nil
 		}
 		reqs := make([]reconcile.Request, 0, len(list.Items))
@@ -706,6 +782,7 @@ func (r *EnvironmentLeaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.LimitRange{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Watches(&corev1.Namespace{}, mapNamespace, builder.WithPredicates(nsPred)).
+		Watches(&platformv1alpha1.EnvironmentLeasePolicy{}, mapPolicy).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).
 		Named("environmentlease").
 		Complete(r)

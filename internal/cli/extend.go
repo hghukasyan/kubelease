@@ -73,7 +73,7 @@ func runExtend(ctx context.Context, c client.Client, name string, forDuration ti
 		}
 
 		patched := leaseObj.DeepCopy()
-		patched.Spec.TTL = metav1.Duration{Duration: newTTL}
+		patched.Spec.TTL = &metav1.Duration{Duration: newTTL}
 		if err := c.Patch(ctx, patched, client.MergeFrom(leaseObj)); err != nil {
 			return err
 		}

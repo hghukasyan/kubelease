@@ -36,7 +36,33 @@ func StatusEqual(a, b platformv1alpha1.EnvironmentLeaseStatus) bool {
 	if !stringSliceEqual(a.WarningsDelivered, b.WarningsDelivered) {
 		return false
 	}
+	if !effectiveEqual(a.Effective, b.Effective) {
+		return false
+	}
 	return conditionsEqual(a.Conditions, b.Conditions)
+}
+
+func effectiveEqual(a, b *platformv1alpha1.EffectiveLeaseSpec) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if a.PolicyName != b.PolicyName || a.Renewable != b.Renewable || a.DefaultDeny != b.DefaultDeny {
+		return false
+	}
+	if a.TTL.Duration != b.TTL.Duration || a.MaxTTL.Duration != b.MaxTTL.Duration {
+		return false
+	}
+	switch {
+	case a.IdleTTL == nil && b.IdleTTL == nil:
+		return true
+	case a.IdleTTL == nil || b.IdleTTL == nil:
+		return false
+	default:
+		return a.IdleTTL.Duration == b.IdleTTL.Duration
+	}
 }
 
 func timePtrEqual(a, b *metav1.Time) bool {
@@ -99,6 +125,14 @@ func DeepCopyStatus(s platformv1alpha1.EnvironmentLeaseStatus) platformv1alpha1.
 	}
 	if s.WarningsDelivered != nil {
 		out.WarningsDelivered = append([]string{}, s.WarningsDelivered...)
+	}
+	if s.Effective != nil {
+		e := *s.Effective
+		if s.Effective.IdleTTL != nil {
+			d := *s.Effective.IdleTTL
+			e.IdleTTL = &d
+		}
+		out.Effective = &e
 	}
 	if s.Conditions != nil {
 		out.Conditions = make([]metav1.Condition, len(s.Conditions))

@@ -35,6 +35,7 @@ import (
 type createOptions struct {
 	ttl           time.Duration
 	maxTTL        time.Duration
+	policy        string
 	owner         string
 	team          string
 	cpuRequest    string
@@ -75,6 +76,7 @@ func newCreateCommand(gf *GlobalFlags) *cobra.Command {
 
 	cmd.Flags().DurationVar(&opts.ttl, "ttl", opts.ttl, "Lease TTL")
 	cmd.Flags().DurationVar(&opts.maxTTL, "max-ttl", 0, "Maximum lifetime from creation (defaults to ttl)")
+	cmd.Flags().StringVar(&opts.policy, "policy", "", "EnvironmentLeasePolicy name to reference")
 	cmd.Flags().StringVar(&opts.owner, "owner", "", "Owner name")
 	cmd.Flags().StringVar(&opts.team, "team", "", "Owner team")
 	cmd.Flags().StringVar(&opts.cpuRequest, "cpu-request", "", "CPU request quota (e.g. 2)")
@@ -94,22 +96,20 @@ func newCreateCommand(gf *GlobalFlags) *cobra.Command {
 
 // BuildLease constructs an EnvironmentLease from create options (testable).
 func BuildLease(name string, opts *createOptions) (*platformv1alpha1.EnvironmentLease, error) {
-	if opts.ttl <= 0 {
-		return nil, fmt.Errorf("--ttl must be greater than zero")
+	if opts.ttl <= 0 && opts.policy == "" {
+		return nil, fmt.Errorf("--ttl must be greater than zero (or set --policy with a default)")
 	}
 	maxTTL := opts.maxTTL
-	if maxTTL == 0 {
+	if maxTTL == 0 && opts.ttl > 0 {
 		maxTTL = opts.ttl
 	}
-	if maxTTL < opts.ttl {
+	if opts.ttl > 0 && maxTTL > 0 && maxTTL < opts.ttl {
 		return nil, fmt.Errorf("--max-ttl must be >= --ttl")
 	}
 
 	leaseObj := &platformv1alpha1.EnvironmentLease{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: platformv1alpha1.EnvironmentLeaseSpec{
-			TTL:       metav1.Duration{Duration: opts.ttl},
-			MaxTTL:    &metav1.Duration{Duration: maxTTL},
 			Renewable: ptr.To(opts.renewable),
 			Owner: platformv1alpha1.OwnerSpec{
 				Name: opts.owner,
@@ -123,6 +123,15 @@ func BuildLease(name string, opts *createOptions) (*platformv1alpha1.Environment
 				},
 			},
 		},
+	}
+	if opts.policy != "" {
+		leaseObj.Spec.PolicyRef = &platformv1alpha1.LocalObjectReference{Name: opts.policy}
+	}
+	if opts.ttl > 0 {
+		leaseObj.Spec.TTL = &metav1.Duration{Duration: opts.ttl}
+	}
+	if maxTTL > 0 {
+		leaseObj.Spec.MaxTTL = &metav1.Duration{Duration: maxTTL}
 	}
 
 	for _, w := range opts.warnings {

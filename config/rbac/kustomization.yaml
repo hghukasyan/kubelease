@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the {{ .ProjectName }} itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- environmentleasepolicy_admin_role.yaml
+- environmentleasepolicy_editor_role.yaml
+- environmentleasepolicy_viewer_role.yaml
 - environmentlease_admin_role.yaml
 - environmentlease_editor_role.yaml
 - environmentlease_viewer_role.yaml

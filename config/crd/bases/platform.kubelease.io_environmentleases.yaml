@@ -60,10 +60,18 @@ spec:
               EnvironmentLeaseSpec defines the desired state of EnvironmentLease.
 
               Renewal model: extend a lease by increasing Spec.TTL. The controller derives
-              status.expiresAt = status.createdAt + spec.ttl and clamps it to
-              status.maximumExpiresAt (= createdAt + maxTTL). The CLI `extend` command
-              patches Spec.TTL; the controller independently enforces maxTTL and renewable.
+              status.expiresAt = status.createdAt + effectiveTTL and clamps it to
+              status.maximumExpiresAt (= createdAt + effectiveMaxTTL).
+
+              When PolicyRef is set, omitted fields take policy defaults. Values that
+              violate policy hard limits are rejected (not silently clamped).
             properties:
+              idleTTL:
+                description: |-
+                  IdleTTL is the inactivity window before an idle environment may expire.
+                  Enforcement of idle detection is a later phase; the field is resolved
+                  and validated against policy now.
+                type: string
               limits:
                 description: Limits, if set, creates a LimitRange in the managed Namespace.
                 properties:
@@ -111,8 +119,7 @@ spec:
               maxTTL:
                 description: |-
                   MaxTTL is the absolute maximum lifetime from CreatedAt.
-                  If unset, defaults to TTL (no renewal headroom beyond the initial request
-                  unless MaxTTL is raised). Must be >= TTL when set.
+                  If unset, defaults to effective TTL (or policy maxTTL/ttl.maximum).
                 type: string
               namespace:
                 description: Namespace configures the managed Namespace.
@@ -160,6 +167,16 @@ spec:
                     description: Team is the owning team.
                     type: string
                 type: object
+              policyRef:
+                description: PolicyRef references a cluster-scoped EnvironmentLeasePolicy.
+                properties:
+                  name:
+                    description: Name of the referent.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
               quota:
                 description: Quota, if set, creates a ResourceQuota in the managed
                   Namespace.
@@ -186,12 +203,12 @@ spec:
               renewable:
                 description: |-
                   Renewable controls whether Spec.TTL may be increased to extend the lease.
-                  Defaults to true when omitted.
+                  Defaults to true when omitted (unless policy forces otherwise).
                 type: boolean
               ttl:
                 description: |-
                   TTL is the requested lifetime from CreatedAt.
-                  Renewal increases this value so expiresAt moves forward.
+                  Optional when PolicyRef provides ttl.default; otherwise required.
                 type: string
               warnings:
                 description: |-
@@ -203,7 +220,6 @@ spec:
                 x-kubernetes-list-type: set
             required:
             - namespace
-            - ttl
             type: object
           status:
             description: EnvironmentLeaseStatus defines the observed state of EnvironmentLease.
@@ -275,6 +291,34 @@ spec:
                   metadata.creationTimestamp and never reset on controller restart.
                 format: date-time
                 type: string
+              effective:
+                description: Effective holds the policy-resolved values used for reconciliation.
+                properties:
+                  defaultDeny:
+                    description: DefaultDeny is whether default-deny NetworkPolicy
+                      is effective.
+                    type: boolean
+                  idleTTL:
+                    description: IdleTTL is the effective idle TTL when configured.
+                    type: string
+                  maxTTL:
+                    description: MaxTTL is the effective maximum lifetime.
+                    type: string
+                  policyName:
+                    description: PolicyName is the referenced policy, if any.
+                    type: string
+                  renewable:
+                    description: Renewable is the effective renewability.
+                    type: boolean
+                  ttl:
+                    description: TTL is the effective lease TTL.
+                    type: string
+                required:
+                - defaultDeny
+                - maxTTL
+                - renewable
+                - ttl
+                type: object
               expiresAt:
                 description: ExpiresAt is CreatedAt + Spec.TTL, clamped to MaximumExpiresAt.
                 format: date-time

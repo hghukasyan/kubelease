@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/platform.kubelease.io_environmentleases.yaml
+- bases/platform.kubelease.io_environmentleasepolicies.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
