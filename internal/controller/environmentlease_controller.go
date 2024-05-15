@@ -163,6 +163,8 @@ func (r *EnvironmentLeaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			platformv1alpha1.ReasonRenewalRejected, "TTL increase ignored because lease is not renewable")
 	}
 
+	lease.SyncExpirationStatus(leaseObj, resolved.IdleTTL, r.now())
+
 	// Detect renewal for events/metrics (expiresAt moved later).
 	if previousExpires != nil && leaseObj.Status.ExpiresAt != nil &&
 		leaseObj.Status.ExpiresAt.After(*previousExpires) &&
@@ -279,9 +281,13 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 		}
 	}
 
+	deadline := lease.EffectiveDeadline(leaseObj)
+	if deadline == nil {
+		return ctrl.Result{}, nil
+	}
 	until := lease.NextReconcileAfter(
 		r.now(),
-		leaseObj.Status.ExpiresAt.Time,
+		*deadline,
 		lease.WarningDurations(leaseObj.Spec.Warnings),
 		leaseObj.Status.WarningsDelivered,
 	)
@@ -290,17 +296,18 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 
 // emitWarnings fires pending LeaseExpiring events and records delivery in status.
 func (r *EnvironmentLeaseReconciler) emitWarnings(_ context.Context, leaseObj *platformv1alpha1.EnvironmentLease) {
-	if leaseObj.Status.ExpiresAt == nil {
+	deadline := lease.EffectiveDeadline(leaseObj)
+	if deadline == nil {
 		return
 	}
 	pending := lease.PendingWarnings(
 		r.now(),
-		leaseObj.Status.ExpiresAt.Time,
+		*deadline,
 		lease.WarningDurations(leaseObj.Spec.Warnings),
 		leaseObj.Status.WarningsDelivered,
 	)
 	for _, w := range pending {
-		remaining := leaseObj.Status.ExpiresAt.Time.Sub(r.now())
+		remaining := deadline.Sub(r.now())
 		msg := lease.WarningMessage(leaseObj.Name, remaining)
 		if r.Recorder != nil {
 			r.Recorder.Event(leaseObj, corev1.EventTypeWarning, eventLeaseExpiring, msg)
@@ -322,18 +329,35 @@ func (r *EnvironmentLeaseReconciler) reconcileExpired(
 		previousPhase != platformv1alpha1.LeasePhaseCleaning &&
 		previousPhase != platformv1alpha1.LeasePhaseExpiring
 
+	reason := leaseObj.Status.ExpirationReason
+	if reason == "" {
+		var idle *time.Time
+		if leaseObj.Status.IdleExpiresAt != nil {
+			t := leaseObj.Status.IdleExpiresAt.Time
+			idle = &t
+		}
+		hard := time.Time{}
+		if leaseObj.Status.ExpiresAt != nil {
+			hard = leaseObj.Status.ExpiresAt.Time
+		}
+		reason = lease.ResolveExpirationReason(r.now(), hard, idle)
+	}
+
 	if firstExpiry {
 		metrics.LeasesExpiredTotal.Inc()
 		if r.Recorder != nil {
-			r.Recorder.Event(leaseObj, corev1.EventTypeNormal, eventLeaseExpired,
-				"Lease TTL elapsed; cleaning up environment")
+			r.Recorder.Eventf(leaseObj, corev1.EventTypeNormal, eventLeaseExpired,
+				"Lease expired (%s); cleaning up environment", reason)
 			r.Recorder.Event(leaseObj, corev1.EventTypeNormal, eventCleanupStarted,
 				"Cleanup started")
 		}
-		log.Info("lease expired", "expiresAt", leaseObj.Status.ExpiresAt)
+		log.Info("lease expired",
+			"reason", reason,
+			"effectiveExpiresAt", leaseObj.Status.EffectiveExpiresAt,
+			"expiresAt", leaseObj.Status.ExpiresAt)
 	}
 
-	lease.MarkExpired(leaseObj)
+	lease.MarkExpired(leaseObj, reason)
 	done, err := r.cleanupEnvironment(ctx, leaseObj)
 	if err != nil {
 		lease.MarkCleanupFailed(leaseObj, err.Error())
@@ -376,6 +400,9 @@ func (r *EnvironmentLeaseReconciler) reconcileDelete(
 	}
 
 	before := lease.DeepCopyStatus(leaseObj.Status)
+	if leaseObj.Status.ExpirationReason != platformv1alpha1.ExpirationReasonSourceClosed {
+		leaseObj.Status.ExpirationReason = platformv1alpha1.ExpirationReasonManualExpiration
+	}
 	if leaseObj.Status.Phase != platformv1alpha1.LeasePhaseCleaning {
 		if r.Recorder != nil {
 			r.Recorder.Event(leaseObj, corev1.EventTypeNormal, eventCleanupStarted, "Cleanup started")

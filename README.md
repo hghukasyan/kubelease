@@ -105,17 +105,40 @@ kubectl kubelease create payment-pr \
   --warning 15m
 ```
 
-## List / get / extend / expire
+## List / get / extend / touch / expire
 
 ```bash
 kubectl kubelease list
 kubectl kubelease get payment-pr
 kubectl kubelease extend payment-pr --for 4h
+kubectl kubelease touch payment-pr
 kubectl kubelease expire payment-pr
 ```
 
+`touch` records activity (`status.lastActivityAt`) and extends idle expiration when
+`idleTTL` is set. It never extends the hard TTL / maxTTL.
+
 `expire` deletes the `EnvironmentLease` CR. The controller finalizer performs cleanup.
 The CLI never deletes Namespaces directly.
+
+## Idle expiration
+
+When `spec.idleTTL` is set:
+
+```text
+effectiveExpiration = min(hardExpiration, lastActivityAt + idleTTL)
+```
+
+- `status.expiresAt` — hard TTL (`createdAt + ttl`)
+- `status.lastActivityAt` — last heartbeat (status; not spec)
+- `status.idleExpiresAt` — `lastActivityAt + idleTTL` (capped to hard TTL)
+- `status.effectiveExpiresAt` — deadline used for scheduling and expiry
+- `status.expirationReason` — `TTLExpired`, `IdleTimeout`, `ManualExpiration`, or `SourceClosed`
+
+```bash
+kubectl kubelease create payment-pr --ttl 8h --idle-ttl 30m
+kubectl kubelease touch payment-pr
+```
 
 ## EnvironmentLeasePolicy
 
@@ -163,8 +186,12 @@ make deploy IMG=<your-registry>/kubelease:tag
 | `status.phase` | `Pending`, `Provisioning`, `Active`, `Expiring`, `Cleaning`, `Expired`, `Failed` |
 | `status.namespace` | Managed Namespace name |
 | `status.createdAt` | Sticky lease start (from `metadata.creationTimestamp`) |
-| `status.expiresAt` | `createdAt + ttl`, clamped to max |
+| `status.expiresAt` | Hard TTL: `createdAt + ttl` |
 | `status.maximumExpiresAt` | `createdAt + maxTTL` |
+| `status.lastActivityAt` | Last heartbeat (initialized to `createdAt`) |
+| `status.idleExpiresAt` | `lastActivityAt + idleTTL` (capped to hard TTL) |
+| `status.effectiveExpiresAt` | `min(expiresAt, idleExpiresAt)` |
+| `status.expirationReason` | Why the lease expired |
 | `status.warningsDelivered` | Warning keys already emitted (restart-safe) |
 | Conditions | `Ready`, `Expiring`, `Cleanup`, `Degraded` |
 

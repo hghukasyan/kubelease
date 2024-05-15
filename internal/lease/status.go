@@ -30,7 +30,13 @@ func StatusEqual(a, b platformv1alpha1.EnvironmentLeaseStatus) bool {
 	}
 	if !timePtrEqual(a.CreatedAt, b.CreatedAt) ||
 		!timePtrEqual(a.ExpiresAt, b.ExpiresAt) ||
-		!timePtrEqual(a.MaximumExpiresAt, b.MaximumExpiresAt) {
+		!timePtrEqual(a.MaximumExpiresAt, b.MaximumExpiresAt) ||
+		!timePtrEqual(a.LastActivityAt, b.LastActivityAt) ||
+		!timePtrEqual(a.IdleExpiresAt, b.IdleExpiresAt) ||
+		!timePtrEqual(a.EffectiveExpiresAt, b.EffectiveExpiresAt) {
+		return false
+	}
+	if a.ExpirationReason != b.ExpirationReason {
 		return false
 	}
 	if !stringSliceEqual(a.WarningsDelivered, b.WarningsDelivered) {
@@ -122,6 +128,18 @@ func DeepCopyStatus(s platformv1alpha1.EnvironmentLeaseStatus) platformv1alpha1.
 	if s.MaximumExpiresAt != nil {
 		t := *s.MaximumExpiresAt
 		out.MaximumExpiresAt = &t
+	}
+	if s.LastActivityAt != nil {
+		t := *s.LastActivityAt
+		out.LastActivityAt = &t
+	}
+	if s.IdleExpiresAt != nil {
+		t := *s.IdleExpiresAt
+		out.IdleExpiresAt = &t
+	}
+	if s.EffectiveExpiresAt != nil {
+		t := *s.EffectiveExpiresAt
+		out.EffectiveExpiresAt = &t
 	}
 	if s.WarningsDelivered != nil {
 		out.WarningsDelivered = append([]string{}, s.WarningsDelivered...)

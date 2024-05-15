@@ -430,6 +430,89 @@ var _ = Describe("EnvironmentLease Controller", func() {
 			g.Expect(got.Status.Phase).To(Equal(platformv1alpha1.LeasePhaseFailed))
 		}, "10s", "200ms").Should(Succeed())
 	})
+
+	It("expires on idleTTL before hard TTL and records IdleTimeout", func() {
+		name := "lease-idle"
+		leaseObj := newLease(name)
+		leaseObj.Spec.IdleTTL = &metav1.Duration{Duration: time.Hour}
+		Expect(k8sClient.Create(ctx, leaseObj)).To(Succeed())
+		got := reconcileUntilActive(name)
+
+		Expect(got.Status.LastActivityAt).NotTo(BeNil())
+		Expect(got.Status.IdleExpiresAt).NotTo(BeNil())
+		Expect(got.Status.EffectiveExpiresAt).NotTo(BeNil())
+		Expect(got.Status.EffectiveExpiresAt.Time).To(Equal(got.Status.IdleExpiresAt.Time))
+		Expect(got.Status.EffectiveExpiresAt.Before(got.Status.ExpiresAt)).To(BeTrue())
+
+		setClock(got.Status.IdleExpiresAt.Add(time.Minute))
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
+		nsName := got.Status.Namespace
+
+		Eventually(func(g Gomega) {
+			_, err := reconciler.Reconcile(ctx, req)
+			g.Expect(err).NotTo(HaveOccurred())
+			finalizeNamespace(g, nsName)
+			nsErr := k8sClient.Get(ctx, types.NamespacedName{Name: nsName}, &corev1.Namespace{})
+			if apierrors.IsNotFound(nsErr) {
+				_, err = reconciler.Reconcile(ctx, req)
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+			current := &platformv1alpha1.EnvironmentLease{}
+			g.Expect(k8sClient.Get(ctx, req.NamespacedName, current)).To(Succeed())
+			g.Expect(current.Status.ExpirationReason).To(Equal(platformv1alpha1.ExpirationReasonIdleTimeout))
+			g.Expect(current.Status.Phase).To(Equal(platformv1alpha1.LeasePhaseExpired))
+		}, "30s", "200ms").Should(Succeed())
+	})
+
+	It("extends idle lifetime on touch without changing hard TTL", func() {
+		name := "lease-touch"
+		leaseObj := newLease(name)
+		leaseObj.Spec.IdleTTL = &metav1.Duration{Duration: 30 * time.Minute}
+		Expect(k8sClient.Create(ctx, leaseObj)).To(Succeed())
+		got := reconcileUntilActive(name)
+		hardBefore := got.Status.ExpiresAt.DeepCopy()
+		idleBefore := got.Status.IdleExpiresAt.DeepCopy()
+
+		setClock(got.Status.CreatedAt.Add(10 * time.Minute))
+		Expect(lease.RecordActivity(got, clockTime, 30*time.Minute)).To(Succeed())
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
+		_, err := reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, req.NamespacedName, got)).To(Succeed())
+		Expect(got.Status.ExpiresAt.Equal(hardBefore)).To(BeTrue())
+		Expect(got.Status.IdleExpiresAt.After(idleBefore.Time)).To(BeTrue())
+		Expect(got.Status.EffectiveExpiresAt.After(idleBefore.Time)).To(BeTrue())
+		Expect(got.Status.EffectiveExpiresAt.After(got.Status.ExpiresAt.Time)).To(BeFalse())
+	})
+
+	It("expires immediately when already past idle deadline at startup", func() {
+		name := "lease-idle-startup"
+		leaseObj := newLease(name)
+		leaseObj.Spec.TTL = &metav1.Duration{Duration: 8 * time.Hour}
+		leaseObj.Spec.IdleTTL = &metav1.Duration{Duration: 15 * time.Minute}
+		Expect(k8sClient.Create(ctx, leaseObj)).To(Succeed())
+		got := reconcileUntilActive(name)
+		nsName := got.Status.Namespace
+
+		// Jump well past idle window but before hard TTL.
+		setClock(got.Status.CreatedAt.Add(time.Hour))
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
+		Eventually(func(g Gomega) {
+			_, err := reconciler.Reconcile(ctx, req)
+			g.Expect(err).NotTo(HaveOccurred())
+			finalizeNamespace(g, nsName)
+			if apierrors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: nsName}, &corev1.Namespace{})) {
+				_, err = reconciler.Reconcile(ctx, req)
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+			current := &platformv1alpha1.EnvironmentLease{}
+			g.Expect(k8sClient.Get(ctx, req.NamespacedName, current)).To(Succeed())
+			g.Expect(current.Status.ExpirationReason).To(Equal(platformv1alpha1.ExpirationReasonIdleTimeout))
+		}, "30s", "200ms").Should(Succeed())
+	})
 })
 
 func qtyPtr(s string) *resource.Quantity {

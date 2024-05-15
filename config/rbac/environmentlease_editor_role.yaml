@@ -31,3 +31,5 @@ rules:
   - environmentleases/status
   verbs:
   - get
+  - patch
+  - update

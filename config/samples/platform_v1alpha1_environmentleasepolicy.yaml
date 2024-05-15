@@ -9,6 +9,9 @@ spec:
   ttl:
     default: 8h
     maximum: 72h
+  idleTTL:
+    default: 30m
+    maximum: 2h
   quota:
     maxCPU: "4"
     maxMemory: 8Gi

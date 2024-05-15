@@ -24,9 +24,12 @@ spec:
     - jsonPath: .status.namespace
       name: Namespace
       type: string
-    - jsonPath: .status.expiresAt
+    - jsonPath: .status.effectiveExpiresAt
       name: Expires
       type: date
+    - jsonPath: .status.expirationReason
+      name: Reason
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -69,8 +72,9 @@ spec:
               idleTTL:
                 description: |-
                   IdleTTL is the inactivity window before an idle environment may expire.
-                  Enforcement of idle detection is a later phase; the field is resolved
-                  and validated against policy now.
+                  When set, effective expiration is min(hardExpiresAt, lastActivityAt+idleTTL).
+                  Heartbeats (kubectl kubelease touch) update status.lastActivityAt.
+                  Activity can never bypass the hard TTL / maxTTL.
                 type: string
               limits:
                 description: Limits, if set, creates a LimitRange in the managed Namespace.
@@ -319,8 +323,37 @@ spec:
                 - renewable
                 - ttl
                 type: object
+              effectiveExpiresAt:
+                description: |-
+                  EffectiveExpiresAt is min(ExpiresAt, IdleExpiresAt) when idle is enabled,
+                  otherwise equal to ExpiresAt. Controllers schedule and expire against this.
+                format: date-time
+                type: string
+              expirationReason:
+                description: ExpirationReason is set when the lease has effectively
+                  expired.
+                enum:
+                - TTLExpired
+                - IdleTimeout
+                - ManualExpiration
+                - SourceClosed
+                type: string
               expiresAt:
-                description: ExpiresAt is CreatedAt + Spec.TTL, clamped to MaximumExpiresAt.
+                description: 'ExpiresAt is the hard expiration: CreatedAt + Spec.TTL,
+                  <= MaximumExpiresAt.'
+                format: date-time
+                type: string
+              idleExpiresAt:
+                description: |-
+                  IdleExpiresAt is LastActivityAt + effective idleTTL when idleTTL is set.
+                  Capped so it never exceeds ExpiresAt / MaximumExpiresAt.
+                format: date-time
+                type: string
+              lastActivityAt:
+                description: |-
+                  LastActivityAt is the last observed heartbeat. Initialized to CreatedAt and
+                  updated by explicit activity (kubectl kubelease touch). Lives in status
+                  because it is observed runtime state, not desired configuration.
                 format: date-time
                 type: string
               maximumExpiresAt:

@@ -81,6 +81,21 @@ const (
 	ReasonNamespaceAdoptRefused       = "NamespaceAdoptRefused"
 )
 
+// ExpirationReason explains why a lease reached effective expiration.
+// +kubebuilder:validation:Enum=TTLExpired;IdleTimeout;ManualExpiration;SourceClosed
+type ExpirationReason string
+
+const (
+	// ExpirationReasonTTLExpired means the hard TTL (createdAt+ttl) elapsed.
+	ExpirationReasonTTLExpired ExpirationReason = "TTLExpired"
+	// ExpirationReasonIdleTimeout means lastActivityAt+idleTTL elapsed first.
+	ExpirationReasonIdleTimeout ExpirationReason = "IdleTimeout"
+	// ExpirationReasonManualExpiration means the lease was explicitly expired/deleted.
+	ExpirationReasonManualExpiration ExpirationReason = "ManualExpiration"
+	// ExpirationReasonSourceClosed means the upstream source (e.g. PR) closed.
+	ExpirationReasonSourceClosed ExpirationReason = "SourceClosed"
+)
+
 // LocalObjectReference identifies a cluster-scoped policy by name.
 type LocalObjectReference struct {
 	// Name of the referent.
@@ -184,8 +199,9 @@ type EnvironmentLeaseSpec struct {
 	MaxTTL *metav1.Duration `json:"maxTTL,omitempty"`
 
 	// IdleTTL is the inactivity window before an idle environment may expire.
-	// Enforcement of idle detection is a later phase; the field is resolved
-	// and validated against policy now.
+	// When set, effective expiration is min(hardExpiresAt, lastActivityAt+idleTTL).
+	// Heartbeats (kubectl kubelease touch) update status.lastActivityAt.
+	// Activity can never bypass the hard TTL / maxTTL.
 	// +optional
 	IdleTTL *metav1.Duration `json:"idleTTL,omitempty"`
 
@@ -254,13 +270,33 @@ type EnvironmentLeaseStatus struct {
 	// +optional
 	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
 
-	// ExpiresAt is CreatedAt + Spec.TTL, clamped to MaximumExpiresAt.
+	// ExpiresAt is the hard expiration: CreatedAt + Spec.TTL, <= MaximumExpiresAt.
 	// +optional
 	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
 
 	// MaximumExpiresAt is CreatedAt + effective MaxTTL. Renewals cannot exceed this.
 	// +optional
 	MaximumExpiresAt *metav1.Time `json:"maximumExpiresAt,omitempty"`
+
+	// LastActivityAt is the last observed heartbeat. Initialized to CreatedAt and
+	// updated by explicit activity (kubectl kubelease touch). Lives in status
+	// because it is observed runtime state, not desired configuration.
+	// +optional
+	LastActivityAt *metav1.Time `json:"lastActivityAt,omitempty"`
+
+	// IdleExpiresAt is LastActivityAt + effective idleTTL when idleTTL is set.
+	// Capped so it never exceeds ExpiresAt / MaximumExpiresAt.
+	// +optional
+	IdleExpiresAt *metav1.Time `json:"idleExpiresAt,omitempty"`
+
+	// EffectiveExpiresAt is min(ExpiresAt, IdleExpiresAt) when idle is enabled,
+	// otherwise equal to ExpiresAt. Controllers schedule and expire against this.
+	// +optional
+	EffectiveExpiresAt *metav1.Time `json:"effectiveExpiresAt,omitempty"`
+
+	// ExpirationReason is set when the lease has effectively expired.
+	// +optional
+	ExpirationReason ExpirationReason `json:"expirationReason,omitempty"`
 
 	// WarningsDelivered lists warning durations (canonical strings like "1h")
 	// for which a LeaseExpiring event has already been emitted.
@@ -311,7 +347,8 @@ type EffectiveLeaseSpec struct {
 // +kubebuilder:resource:scope=Cluster,shortName=envlease;el
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Namespace",type=string,JSONPath=`.status.namespace`
-// +kubebuilder:printcolumn:name="Expires",type=date,JSONPath=`.status.expiresAt`
+// +kubebuilder:printcolumn:name="Expires",type=date,JSONPath=`.status.effectiveExpiresAt`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.expirationReason`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // EnvironmentLease is the Schema for the environmentleases API.

@@ -35,6 +35,7 @@ import (
 type createOptions struct {
 	ttl           time.Duration
 	maxTTL        time.Duration
+	idleTTL       time.Duration
 	policy        string
 	owner         string
 	team          string
@@ -76,6 +77,7 @@ func newCreateCommand(gf *GlobalFlags) *cobra.Command {
 
 	cmd.Flags().DurationVar(&opts.ttl, "ttl", opts.ttl, "Lease TTL")
 	cmd.Flags().DurationVar(&opts.maxTTL, "max-ttl", 0, "Maximum lifetime from creation (defaults to ttl)")
+	cmd.Flags().DurationVar(&opts.idleTTL, "idle-ttl", 0, "Idle expiration window (requires heartbeats via touch)")
 	cmd.Flags().StringVar(&opts.policy, "policy", "", "EnvironmentLeasePolicy name to reference")
 	cmd.Flags().StringVar(&opts.owner, "owner", "", "Owner name")
 	cmd.Flags().StringVar(&opts.team, "team", "", "Owner team")
@@ -132,6 +134,9 @@ func BuildLease(name string, opts *createOptions) (*platformv1alpha1.Environment
 	}
 	if maxTTL > 0 {
 		leaseObj.Spec.MaxTTL = &metav1.Duration{Duration: maxTTL}
+	}
+	if opts.idleTTL > 0 {
+		leaseObj.Spec.IdleTTL = &metav1.Duration{Duration: opts.idleTTL}
 	}
 
 	for _, w := range opts.warnings {

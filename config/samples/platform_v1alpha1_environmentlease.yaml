@@ -28,6 +28,7 @@ spec:
   # Optional overrides (must satisfy policy hard limits)
   ttl: 8h
   maxTTL: 72h
+  idleTTL: 30m
   renewable: true
 
   warnings:

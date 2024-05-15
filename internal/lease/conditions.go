@@ -17,6 +17,8 @@ limitations under the License.
 package lease
 
 import (
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -80,12 +82,17 @@ func MarkFailed(leaseObj *platformv1alpha1.EnvironmentLease, reason, message str
 }
 
 // MarkExpired sets Expiring/expired ready state before cleanup.
-func MarkExpired(leaseObj *platformv1alpha1.EnvironmentLease) {
+func MarkExpired(leaseObj *platformv1alpha1.EnvironmentLease, reason platformv1alpha1.ExpirationReason) {
+	if reason == "" {
+		reason = platformv1alpha1.ExpirationReasonTTLExpired
+	}
+	leaseObj.Status.ExpirationReason = reason
 	leaseObj.Status.Phase = platformv1alpha1.LeasePhaseExpiring
+	msg := fmt.Sprintf("Lease expired (%s)", reason)
 	SetCondition(leaseObj, platformv1alpha1.ConditionReady, metav1.ConditionFalse,
-		platformv1alpha1.ReasonLeaseExpired, "Lease TTL has elapsed")
+		platformv1alpha1.ReasonLeaseExpired, msg)
 	SetCondition(leaseObj, platformv1alpha1.ConditionExpiring, metav1.ConditionTrue,
-		platformv1alpha1.ReasonLeaseExpired, "Lease TTL has elapsed")
+		platformv1alpha1.ReasonLeaseExpired, msg)
 }
 
 // MarkCleaning sets Cleaning phase and Cleanup condition.

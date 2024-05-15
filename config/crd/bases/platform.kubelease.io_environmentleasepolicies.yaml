@@ -51,9 +51,7 @@ spec:
               hard limits.
             properties:
               idleTTL:
-                description: |-
-                  IdleTTL configures defaults/limits for EnvironmentLease.spec.idleTTL.
-                  Idle detection is enforced in a later phase; values are resolved and validated now.
+                description: IdleTTL configures defaults/limits for EnvironmentLease.spec.idleTTL.
                 properties:
                   default:
                     description: Default is applied when the lease omits the corresponding

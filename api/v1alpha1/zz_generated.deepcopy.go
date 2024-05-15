@@ -358,6 +358,18 @@ func (in *EnvironmentLeaseStatus) DeepCopyInto(out *EnvironmentLeaseStatus) {
 		in, out := &in.MaximumExpiresAt, &out.MaximumExpiresAt
 		*out = (*in).DeepCopy()
 	}
+	if in.LastActivityAt != nil {
+		in, out := &in.LastActivityAt, &out.LastActivityAt
+		*out = (*in).DeepCopy()
+	}
+	if in.IdleExpiresAt != nil {
+		in, out := &in.IdleExpiresAt, &out.IdleExpiresAt
+		*out = (*in).DeepCopy()
+	}
+	if in.EffectiveExpiresAt != nil {
+		in, out := &in.EffectiveExpiresAt, &out.EffectiveExpiresAt
+		*out = (*in).DeepCopy()
+	}
 	if in.WarningsDelivered != nil {
 		in, out := &in.WarningsDelivered, &out.WarningsDelivered
 		*out = make([]string, len(*in))

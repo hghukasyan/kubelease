@@ -83,7 +83,6 @@ type EnvironmentLeasePolicySpec struct {
 	MaxTTL *DurationPolicy `json:"maxTTL,omitempty"`
 
 	// IdleTTL configures defaults/limits for EnvironmentLease.spec.idleTTL.
-	// Idle detection is enforced in a later phase; values are resolved and validated now.
 	// +optional
 	IdleTTL *DurationPolicy `json:"idleTTL,omitempty"`
 

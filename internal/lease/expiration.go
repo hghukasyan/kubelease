@@ -119,17 +119,20 @@ func EnsureTimestamps(
 	return changed, renewalRejected, nil
 }
 
-// IsExpired reports whether now is at or after ExpiresAt.
+// IsExpired reports whether now is at or after the effective expiration deadline.
 func IsExpired(leaseObj *platformv1alpha1.EnvironmentLease, now time.Time) bool {
-	if leaseObj.Status.ExpiresAt == nil {
+	deadline := EffectiveDeadline(leaseObj)
+	if deadline == nil {
 		return false
 	}
-	return !now.Before(leaseObj.Status.ExpiresAt.Time)
+	return !now.Before(*deadline)
 }
 
-// IsExpiringWindow reports whether we are inside the largest warning window.
+// IsExpiringWindow reports whether we are inside the largest warning window
+// relative to the effective expiration deadline.
 func IsExpiringWindow(leaseObj *platformv1alpha1.EnvironmentLease, now time.Time) bool {
-	if leaseObj.Status.ExpiresAt == nil || IsExpired(leaseObj, now) {
+	deadline := EffectiveDeadline(leaseObj)
+	if deadline == nil || IsExpired(leaseObj, now) {
 		return false
 	}
 	warnings := WarningDurations(leaseObj.Spec.Warnings)
@@ -142,7 +145,7 @@ func IsExpiringWindow(leaseObj *platformv1alpha1.EnvironmentLease, now time.Time
 			earliest = w
 		}
 	}
-	threshold := leaseObj.Status.ExpiresAt.Time.Add(-earliest)
+	threshold := deadline.Add(-earliest)
 	return !now.Before(threshold)
 }
 
