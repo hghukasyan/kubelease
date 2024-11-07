@@ -172,6 +172,34 @@ spec:
 
 `status.effective` records the resolved TTL, maxTTL, renewable, and defaultDeny.
 
+## Generic webhook source
+
+KubeLease exposes an optional authenticated HTTP integration (separate from the
+controller reconciler) for external CI systems:
+
+```text
+External CI → HTTP webhook → EnvironmentLease → Controller
+```
+
+```bash
+make webhook
+# deploy optional manifests (after setting a real token + default policy):
+kubectl apply -k config/sourcewebhook
+```
+
+```bash
+curl -sS -X POST http://kubelease-webhook.kubelease-system.svc/v1/leases \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"create","name":"feature-482","owner":"payments"}'
+```
+
+Supported actions: `create`, `expire`, `touch`.
+
+Callers cannot set `namespace`, `maxTTL`, quotas, or network settings — those come
+from the configured `EnvironmentLeasePolicy` (`--default-policy`). Unknown JSON
+fields are rejected. Requests are idempotent via `requestId` / `Idempotency-Key`.
+
 ## Installation (controller)
 
 ```bash
@@ -217,6 +245,8 @@ Manual Namespace delete while Active: controller **recreates the same** `status.
 | `kubelease_cleanup_failures_total` | Counter |
 | `kubelease_provision_failures_total` | Counter |
 | `kubelease_warning_events_total` | Counter |
+| `kubelease_webhook_requests_total` | Counter (`action`, `result`) |
+| `kubelease_webhook_request_duration_seconds` | Histogram |
 
 No high-cardinality labels (`lease_name`, `owner`, etc.).
 
@@ -227,6 +257,8 @@ No high-cardinality labels (`lease_name`, `owner`, etc.).
 - Cleanup requires matching lease name **and** UID annotation
 - Refuses to adopt Namespaces owned by a different lease
 - Leader election enabled in production manifests
+- Webhook auth uses a Kubernetes Secret token; body size and timeouts are enforced
+- Webhook create path cannot override policy hard limits
 
 ## Development
 
@@ -258,7 +290,7 @@ kubectl kubelease expire demo
 
 ## Roadmap
 
-- Phase 3+: Slack / GitHub integrations, idle TTL, multi-cluster, UI
+- Phase 3+: Slack / GitHub App integrations, multi-cluster, UI
 
 ## Contributing
 

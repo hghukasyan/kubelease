@@ -1,0 +1,57 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: webhook-role
+  labels:
+    app.kubernetes.io/name: kubelease
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/managed-by: kustomize
+rules:
+- apiGroups:
+  - platform.kubelease.io
+  resources:
+  - environmentleases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+  - patch
+  - update
+- apiGroups:
+  - platform.kubelease.io
+  resources:
+  - environmentleases/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - platform.kubelease.io
+  resources:
+  - environmentleasepolicies
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: webhook-token-reader
+  namespace: system
+  labels:
+    app.kubernetes.io/name: kubelease
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/managed-by: kustomize
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  resourceNames:
+  - webhook-token
+  verbs:
+  - get
+  - watch

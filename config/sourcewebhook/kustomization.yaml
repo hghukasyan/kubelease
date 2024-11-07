@@ -1,0 +1,9 @@
+# Optional generic webhook source (HTTP integration, not admission).
+# Enable from an overlay or by adding this directory to config/default resources.
+resources:
+- service_account.yaml
+- role.yaml
+- role_binding.yaml
+- deployment.yaml
+- service.yaml
+- secret.yaml

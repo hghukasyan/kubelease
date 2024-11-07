@@ -104,9 +104,14 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet ## Build manager and CLI binaries.
+build: manifests generate fmt vet ## Build manager, CLI, and webhook binaries.
 	go build -o bin/manager cmd/main.go
 	go build -o bin/kubectl-kubelease ./cmd/kubectl-kubelease
+	go build -o bin/kubelease-webhook ./cmd/kubelease-webhook
+
+.PHONY: webhook
+webhook: ## Build kubelease-webhook into bin/
+	go build -o bin/kubelease-webhook ./cmd/kubelease-webhook
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
