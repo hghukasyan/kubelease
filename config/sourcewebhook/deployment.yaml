@@ -36,6 +36,10 @@ spec:
         - --token-secret-key=token
         - --default-policy=preview-default
         - --namespace-generate-name=preview-
+        - --github-enabled
+        - --github-secret-name=webhook-token
+        - --github-secret-key=github-webhook-secret
+        - --github-repo-policies={"my-company/payments-api":"preview-default"}
         env:
         - name: POD_NAMESPACE
           valueFrom:

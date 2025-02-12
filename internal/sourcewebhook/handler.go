@@ -66,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.HandleFunc("/v1/leases", s.handleLeases)
+	mux.HandleFunc("/v1/github/hooks", s.handleGitHub)
 	return mux
 }
 
@@ -84,6 +85,16 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.TokenProvider.Token(ctx); err != nil {
 		http.Error(w, "token not ready", http.StatusServiceUnavailable)
 		return
+	}
+	if s.Config.GitHubEnabled {
+		if s.GitHubSecretProvider == nil {
+			http.Error(w, "github secret provider not configured", http.StatusServiceUnavailable)
+			return
+		}
+		if _, err := s.GitHubSecretProvider.Token(ctx); err != nil {
+			http.Error(w, "github secret not ready", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))

@@ -94,7 +94,7 @@ func (s *Server) createLease(ctx context.Context, req Request) (ActionResult, er
 
 	leaseObj := s.buildLease(req)
 
-	if err := s.validateAgainstPolicy(ctx, leaseObj); err != nil {
+	if err := s.validateAgainstPolicy(ctx, leaseObj, s.Config.DefaultPolicy); err != nil {
 		return ActionResult{StatusCode: 422, Message: err.Error()}, nil
 	}
 
@@ -154,11 +154,14 @@ func (s *Server) buildLease(req Request) *platformv1alpha1.EnvironmentLease {
 	}
 }
 
-func (s *Server) validateAgainstPolicy(ctx context.Context, leaseObj *platformv1alpha1.EnvironmentLease) error {
+func (s *Server) validateAgainstPolicy(ctx context.Context, leaseObj *platformv1alpha1.EnvironmentLease, policyName string) error {
+	if policyName == "" {
+		policyName = s.Config.DefaultPolicy
+	}
 	pol := &platformv1alpha1.EnvironmentLeasePolicy{}
-	if err := s.Client.Get(ctx, types.NamespacedName{Name: s.Config.DefaultPolicy}, pol); err != nil {
+	if err := s.Client.Get(ctx, types.NamespacedName{Name: policyName}, pol); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("policy %q not found", s.Config.DefaultPolicy)
+			return fmt.Errorf("policy %q not found", policyName)
 		}
 		return fmt.Errorf("get policy: %w", err)
 	}

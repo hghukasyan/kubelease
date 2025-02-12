@@ -200,6 +200,37 @@ Callers cannot set `namespace`, `maxTTL`, quotas, or network settings — those 
 from the configured `EnvironmentLeasePolicy` (`--default-policy`). Unknown JSON
 fields are rejected. Requests are idempotent via `requestId` / `Idempotency-Key`.
 
+## GitHub pull request integration
+
+Built on the same webhook service. GitHub signatures are verified with an HMAC
+secret stored only in a Kubernetes Secret (never on `EnvironmentLease` specs).
+
+| Event | Behavior |
+|---|---|
+| `pull_request.opened` | Ensure lease exists |
+| `pull_request.reopened` | Ensure active lease (create if absent) |
+| `pull_request.closed` | Request lease expiration |
+| `pull_request` closed + merged | Request lease expiration (`SourceClosed`) |
+
+Deterministic identity:
+
+```text
+my-company/payments-api PR #1842 → EnvironmentLease/payments-api-pr-1842
+```
+
+```bash
+# Configure GitHub webhook: POST /v1/github/hooks
+# Secret: value of github-webhook-secret in the webhook Secret
+curl -sS -X POST http://kubelease-webhook.kubelease-system.svc/v1/github/hooks \
+  -H "X-GitHub-Event: pull_request" \
+  -H "X-GitHub-Delivery: $DELIVERY_ID" \
+  -H "X-Hub-Signature-256: sha256=..." \
+  -d @payload.json
+```
+
+Repo → policy mapping uses `--github-repo-policies` JSON. The webhook deletes the
+lease CR only; the controller performs Namespace cleanup.
+
 ## Installation (controller)
 
 ```bash
@@ -290,7 +321,7 @@ kubectl kubelease expire demo
 
 ## Roadmap
 
-- Phase 3+: Slack / GitHub App integrations, multi-cluster, UI
+- Phase 3+: Slack notifications, multi-cluster, UI
 
 ## Contributing
 

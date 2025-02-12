@@ -57,6 +57,17 @@ type Config struct {
 	// NamespaceGenerateName is the Namespace generateName prefix for created leases.
 	NamespaceGenerateName string
 
+	// GitHubEnabled turns on POST /v1/github/hooks.
+	GitHubEnabled bool
+	// GitHubSecretName/Key identify the Secret holding the GitHub webhook HMAC secret.
+	// Never stored on EnvironmentLease specs.
+	GitHubSecretName string
+	GitHubSecretKey  string
+	// GitHubRepoPolicies maps "owner/repo" (lowercase) to EnvironmentLeasePolicy names.
+	GitHubRepoPolicies map[string]string
+	// GitHubMaxBodyBytes overrides MaxBodyBytes for GitHub payloads when > 0.
+	GitHubMaxBodyBytes int64
+
 	MaxBodyBytes   int64
 	ReadTimeout    time.Duration
 	WriteTimeout   time.Duration
@@ -74,6 +85,19 @@ func (c *Config) Defaults() {
 	}
 	if c.NamespaceGenerateName == "" {
 		c.NamespaceGenerateName = "preview-"
+	}
+	if c.GitHubSecretKey == "" {
+		c.GitHubSecretKey = "github-webhook-secret"
+	}
+	if c.GitHubSecretName == "" {
+		if c.TokenSecretName != "" {
+			c.GitHubSecretName = c.TokenSecretName
+		} else {
+			c.GitHubSecretName = "webhook-token"
+		}
+	}
+	if c.GitHubMaxBodyBytes <= 0 {
+		c.GitHubMaxBodyBytes = 1 << 20 // 1 MiB
 	}
 	if c.MaxBodyBytes <= 0 {
 		c.MaxBodyBytes = defaultMaxBodyBytes
@@ -100,6 +124,8 @@ type Server struct {
 	Clock  lease.Clock
 	// TokenProvider supplies the expected bearer token (tests inject static tokens).
 	TokenProvider TokenProvider
+	// GitHubSecretProvider supplies the GitHub webhook HMAC secret.
+	GitHubSecretProvider TokenProvider
 }
 
 func (s *Server) clock() lease.Clock {
