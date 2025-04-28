@@ -1,0 +1,69 @@
+{{- if .Values.controller.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubelease.controller.fullname" . }}
+  labels:
+    {{- include "kubelease.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kubelease.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "kubelease.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: controller
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kubelease.controller.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.controller.podSecurityContext | nindent 8 }}
+      containers:
+        - name: manager
+          image: {{ include "kubelease.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/manager"]
+          args:
+            {{- if .Values.controller.leaderElection }}
+            - --leader-elect
+            {{- end }}
+            - --health-probe-bind-address=:8081
+            {{- if .Values.controller.metrics.enabled }}
+            - --metrics-bind-address=:{{ .Values.controller.metrics.port }}
+            {{- end }}
+            {{- with .Values.controller.args }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.controller.securityContext | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: 8081
+            {{- if .Values.controller.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.controller.metrics.port }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.controller.probes.liveness.path }}
+              port: health
+            initialDelaySeconds: {{ .Values.controller.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.controller.probes.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.controller.probes.readiness.path }}
+              port: health
+            initialDelaySeconds: {{ .Values.controller.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.controller.probes.readiness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+{{- end }}

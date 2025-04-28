@@ -513,6 +513,74 @@ var _ = Describe("EnvironmentLease Controller", func() {
 			g.Expect(current.Status.ExpirationReason).To(Equal(platformv1alpha1.ExpirationReasonIdleTimeout))
 		}, "30s", "200ms").Should(Succeed())
 	})
+
+	It("adopts existing Namespace after crash before status.namespace persist", func() {
+		name := "lease-crash-ns"
+		nsName := "preview-" + name
+		leaseObj := newLease(name)
+		leaseObj.Spec.Namespace.Name = nsName
+		Expect(k8sClient.Create(ctx, leaseObj)).To(Succeed())
+
+		// First reconcile creates Namespace and should persist status.namespace.
+		got := reconcileUntilActive(name)
+		Expect(got.Status.Namespace).To(Equal(nsName))
+
+		// Simulate crash + lost in-memory state: clear status.namespace but leave NS.
+		patched := got.DeepCopy()
+		patched.Status.Namespace = ""
+		Expect(k8sClient.Status().Update(ctx, patched)).To(Succeed())
+
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
+		Eventually(func(g Gomega) {
+			_, err := reconciler.Reconcile(ctx, req)
+			g.Expect(err).NotTo(HaveOccurred())
+			current := &platformv1alpha1.EnvironmentLease{}
+			g.Expect(k8sClient.Get(ctx, req.NamespacedName, current)).To(Succeed())
+			g.Expect(current.Status.Namespace).To(Equal(nsName))
+			g.Expect(current.Status.Phase).To(Equal(platformv1alpha1.LeasePhaseActive))
+		}, "10s", "200ms").Should(Succeed())
+
+		// Exactly one Namespace still exists (no duplicate generateName).
+		nsList := &corev1.NamespaceList{}
+		Expect(k8sClient.List(ctx, nsList, client.MatchingLabels{
+			platformv1alpha1.LabelLease: name,
+		})).To(Succeed())
+		Expect(nsList.Items).To(HaveLen(1))
+		Expect(nsList.Items[0].Name).To(Equal(nsName))
+	})
+
+	It("completes cleanup when Namespace is already gone after crash", func() {
+		name := "lease-crash-cleanup"
+		Expect(k8sClient.Create(ctx, newLease(name))).To(Succeed())
+		got := reconcileUntilActive(name)
+		nsName := got.Status.Namespace
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
+
+		Expect(k8sClient.Delete(ctx, got)).To(Succeed())
+		// Simulate Namespace already deleted while finalizer remains.
+		ns := &corev1.Namespace{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nsName}, ns)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, ns)).To(Succeed())
+		Eventually(func(g Gomega) {
+			finalizeNamespace(g, nsName)
+			g.Expect(apierrors.IsNotFound(
+				k8sClient.Get(ctx, types.NamespacedName{Name: nsName}, &corev1.Namespace{}),
+			)).To(BeTrue())
+		}, "30s", "200ms").Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			err := k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.EnvironmentLease{})
+			if apierrors.IsNotFound(err) {
+				return
+			}
+			g.Expect(err).NotTo(HaveOccurred())
+			_, reconErr := reconciler.Reconcile(ctx, req)
+			g.Expect(reconErr).NotTo(HaveOccurred())
+			g.Expect(apierrors.IsNotFound(
+				k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.EnvironmentLease{}),
+			)).To(BeTrue())
+		}, "30s", "200ms").Should(Succeed())
+	})
 })
 
 func qtyPtr(s string) *resource.Quantity {

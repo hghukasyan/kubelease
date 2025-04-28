@@ -54,6 +54,8 @@ const (
 	eventLeaseRenewed     = "LeaseRenewed"
 	eventLeaseExpiring    = "LeaseExpiring"
 	eventLeaseExpired     = "LeaseExpired"
+	eventLeaseIdleExpired = "LeaseIdleExpired"
+	eventSourceClosed     = "SourceClosed"
 	eventCleanupStarted   = "CleanupStarted"
 	eventCleanupCompleted = "CleanupCompleted"
 	eventCleanupFailed    = "CleanupFailed"
@@ -145,6 +147,7 @@ func (r *EnvironmentLeaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, patchErr
 		}
 		metrics.ProvisionFailuresTotal.Inc()
+		metrics.PolicyRejectionsTotal.Inc()
 		return ctrl.Result{}, nil
 	}
 	leaseObj.Status.Effective = resolved.ToEffectiveStatus()
@@ -345,9 +348,24 @@ func (r *EnvironmentLeaseReconciler) reconcileExpired(
 
 	if firstExpiry {
 		metrics.LeasesExpiredTotal.Inc()
+		switch reason {
+		case platformv1alpha1.ExpirationReasonIdleTimeout:
+			metrics.IdleExpirationsTotal.Inc()
+		case platformv1alpha1.ExpirationReasonManualExpiration:
+			metrics.ManualExpirationsTotal.Inc()
+		}
 		if r.Recorder != nil {
-			r.Recorder.Eventf(leaseObj, corev1.EventTypeNormal, eventLeaseExpired,
-				"Lease expired (%s); cleaning up environment", reason)
+			switch reason {
+			case platformv1alpha1.ExpirationReasonIdleTimeout:
+				r.Recorder.Eventf(leaseObj, corev1.EventTypeNormal, eventLeaseIdleExpired,
+					"Lease idle timeout elapsed; cleaning up environment")
+			case platformv1alpha1.ExpirationReasonSourceClosed:
+				r.Recorder.Eventf(leaseObj, corev1.EventTypeNormal, eventSourceClosed,
+					"Upstream source closed; cleaning up environment")
+			default:
+				r.Recorder.Eventf(leaseObj, corev1.EventTypeNormal, eventLeaseExpired,
+					"Lease expired (%s); cleaning up environment", reason)
+			}
 			r.Recorder.Event(leaseObj, corev1.EventTypeNormal, eventCleanupStarted,
 				"Cleanup started")
 		}
@@ -400,11 +418,20 @@ func (r *EnvironmentLeaseReconciler) reconcileDelete(
 	}
 
 	before := lease.DeepCopyStatus(leaseObj.Status)
+	firstDelete := leaseObj.Status.Phase != platformv1alpha1.LeasePhaseCleaning &&
+		leaseObj.Status.Phase != platformv1alpha1.LeasePhaseExpired
 	if leaseObj.Status.ExpirationReason != platformv1alpha1.ExpirationReasonSourceClosed {
 		leaseObj.Status.ExpirationReason = platformv1alpha1.ExpirationReasonManualExpiration
 	}
-	if leaseObj.Status.Phase != platformv1alpha1.LeasePhaseCleaning {
+	if firstDelete {
+		if leaseObj.Status.ExpirationReason == platformv1alpha1.ExpirationReasonManualExpiration {
+			metrics.ManualExpirationsTotal.Inc()
+		}
 		if r.Recorder != nil {
+			if leaseObj.Status.ExpirationReason == platformv1alpha1.ExpirationReasonSourceClosed {
+				r.Recorder.Event(leaseObj, corev1.EventTypeNormal, eventSourceClosed,
+					"Upstream source closed; cleaning up environment")
+			}
 			r.Recorder.Event(leaseObj, corev1.EventTypeNormal, eventCleanupStarted, "Cleanup started")
 		}
 	}

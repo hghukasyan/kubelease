@@ -1,0 +1,111 @@
+# Default values for kubelease.
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/hghukasyan/kubelease
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+controller:
+  enabled: true
+  replicas: 1
+  leaderElection: true
+  args: []
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  probes:
+    liveness:
+      path: /healthz
+      port: 8081
+      initialDelaySeconds: 15
+      periodSeconds: 20
+    readiness:
+      path: /readyz
+      port: 8081
+      initialDelaySeconds: 5
+      periodSeconds: 10
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  metrics:
+    enabled: true
+    port: 8443
+
+webhook:
+  enabled: true
+  replicas: 1
+  defaultPolicy: preview-default
+  namespaceGenerateName: preview-
+  github:
+    enabled: false
+    repoPolicies: {}
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  probes:
+    liveness:
+      path: /healthz
+      port: 8082
+      initialDelaySeconds: 5
+      periodSeconds: 20
+    readiness:
+      path: /readyz
+      port: 8082
+      initialDelaySeconds: 3
+      periodSeconds: 10
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  service:
+    type: ClusterIP
+    port: 80
+  # Existing secret name; when empty a placeholder Secret is created.
+  # Keys: token, github-webhook-secret
+  existingSecret: ""
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: kubelease-webhook.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+# Install CRDs separately with: kubectl apply -k config/crd
+# or: make install

@@ -21,6 +21,19 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
+// Bounded label values for source metrics (never lease_name/namespace/repo/user/PR).
+const (
+	ProviderWebhook = "webhook"
+	ProviderGitHub  = "github"
+
+	ActionCreate = "create"
+	ActionExpire = "expire"
+	ActionTouch  = "touch"
+
+	ResultSuccess = "success"
+	ResultFailure = "failure"
+)
+
 var (
 	// Leases is the number of EnvironmentLeases by phase.
 	// Label "phase" is bounded to the LeasePhase enum.
@@ -36,7 +49,7 @@ var (
 
 	LeasesExpiredTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "kubelease_leases_expired_total",
-		Help: "Total EnvironmentLeases that reached TTL expiration",
+		Help: "Total EnvironmentLeases that reached effective expiration",
 	})
 
 	RenewalsTotal = prometheus.NewCounter(prometheus.CounterOpts{
@@ -58,6 +71,34 @@ var (
 		Name: "kubelease_warning_events_total",
 		Help: "Total LeaseExpiring warning events emitted",
 	})
+
+	// SourceEventsTotal counts integration-source outcomes.
+	// Labels: provider=github|webhook, action=create|expire|touch, result=success|failure
+	SourceEventsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubelease_source_events_total",
+		Help: "Total integration source events by provider, action, and result",
+	}, []string{"provider", "action", "result"})
+
+	// SourceErrorsTotal counts integration-source failures (subset of source events).
+	SourceErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubelease_source_errors_total",
+		Help: "Total integration source errors by provider and action",
+	}, []string{"provider", "action"})
+
+	IdleExpirationsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_idle_expirations_total",
+		Help: "Total leases expired due to idle timeout",
+	})
+
+	ManualExpirationsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_manual_expirations_total",
+		Help: "Total leases expired via explicit delete/expire (manual)",
+	})
+
+	PolicyRejectionsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_policy_rejections_total",
+		Help: "Total leases rejected for policy violations",
+	})
 )
 
 func init() {
@@ -69,5 +110,18 @@ func init() {
 		CleanupFailuresTotal,
 		ProvisionFailuresTotal,
 		WarningEventsTotal,
+		SourceEventsTotal,
+		SourceErrorsTotal,
+		IdleExpirationsTotal,
+		ManualExpirationsTotal,
+		PolicyRejectionsTotal,
 	)
+}
+
+// ObserveSource records a bounded-cardinality source event.
+func ObserveSource(provider, action, result string) {
+	SourceEventsTotal.WithLabelValues(provider, action, result).Inc()
+	if result == ResultFailure {
+		SourceErrorsTotal.WithLabelValues(provider, action).Inc()
+	}
 }

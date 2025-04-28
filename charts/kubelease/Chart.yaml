@@ -1,0 +1,16 @@
+apiVersion: v2
+name: kubelease
+description: Ephemeral Kubernetes environments with expiration, policies, and integrations
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+keywords:
+  - kubernetes
+  - operator
+  - ephemeral
+  - preview
+home: https://github.com/hghukasyan/kubelease
+sources:
+  - https://github.com/hghukasyan/kubelease
+maintainers:
+  - name: KubeLease Authors

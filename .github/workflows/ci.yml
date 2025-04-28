@@ -40,6 +40,22 @@ jobs:
         with:
           version: v1.63.4
 
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: govulncheck
+        run: make govulncheck
+        # Report findings; do not fail the tree solely on transitive/toolchain noise
+        # while k8s dependencies lag. Review job logs on every PR.
+        continue-on-error: true
+
   manifests:
     name: verify manifests
     runs-on: ubuntu-latest
@@ -54,3 +70,27 @@ jobs:
         run: |
           make manifests generate
           git diff --exit-code
+
+  smoke:
+    name: kind smoke
+    runs-on: ubuntu-latest
+    # Keep PR CI fast; run smoke on main pushes and manual runs.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - name: Create kind cluster
+        run: kind create cluster --name kubelease-smoke
+
+      - name: Smoke test
+        run: ./hack/kind-smoke.sh

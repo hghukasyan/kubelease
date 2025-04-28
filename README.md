@@ -6,6 +6,18 @@ KubeLease is a Kubernetes Operator that creates and manages ephemeral environmen
 from an `EnvironmentLease` custom resource. When the lease expires (or is deleted),
 KubeLease safely cleans up the managed Namespace and its supporting resources.
 
+## Documentation
+
+Detailed docs live under [`docs/`](docs/):
+
+- [Architecture](docs/architecture.md)
+- [Policies](docs/policies.md)
+- [Idle expiration](docs/idle-expiration.md)
+- [Webhook integration](docs/webhook-integration.md)
+- [GitHub integration](docs/github-integration.md)
+- [Security](docs/security.md)
+- [Operations](docs/operations.md)
+
 ## Why KubeLease?
 
 Preview environments, CI sandboxes, and short-lived developer namespaces are easy
@@ -276,10 +288,15 @@ Manual Namespace delete while Active: controller **recreates the same** `status.
 | `kubelease_cleanup_failures_total` | Counter |
 | `kubelease_provision_failures_total` | Counter |
 | `kubelease_warning_events_total` | Counter |
+| `kubelease_source_events_total` | Counter (`provider`, `action`, `result`) |
+| `kubelease_source_errors_total` | Counter (`provider`, `action`) |
+| `kubelease_idle_expirations_total` | Counter |
+| `kubelease_manual_expirations_total` | Counter |
+| `kubelease_policy_rejections_total` | Counter |
 | `kubelease_webhook_requests_total` | Counter (`action`, `result`) |
 | `kubelease_webhook_request_duration_seconds` | Histogram |
 
-No high-cardinality labels (`lease_name`, `owner`, etc.).
+No high-cardinality labels (`lease_name`, `owner`, `repo`, PR number, etc.).
 
 ## Security model
 
@@ -321,7 +338,7 @@ kubectl kubelease expire demo
 
 ## Roadmap
 
-- Phase 3+: Slack notifications, multi-cluster, UI
+- Multi-cluster, Slack notifications, UI
 
 ## Contributing
 

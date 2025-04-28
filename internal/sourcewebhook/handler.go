@@ -20,10 +20,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	appmetrics "github.com/hghukasyan/kubelease/internal/metrics"
 )
 
 const (
@@ -49,7 +52,7 @@ var (
 )
 
 func init() {
-	metrics.Registry.MustRegister(webhookRequestsTotal, webhookRequestDuration)
+	crmetrics.Registry.MustRegister(webhookRequestsTotal, webhookRequestDuration)
 }
 
 type responseBody struct {
@@ -181,6 +184,7 @@ func (s *Server) handleLeases(w http.ResponseWriter, r *http.Request) {
 	if out.StatusCode >= 400 {
 		status = "error"
 	}
+	observeWebhookSource(string(req.Action), out.StatusCode, out.Duplicate)
 	writeJSON(w, out.StatusCode, responseBody{
 		Status:    status,
 		Message:   out.Message,
@@ -188,6 +192,41 @@ func (s *Server) handleLeases(w http.ResponseWriter, r *http.Request) {
 		Namespace: out.Namespace,
 		Duplicate: out.Duplicate,
 	})
+}
+
+func observeWebhookSource(action string, statusCode int, duplicate bool) {
+	mapped := mapSourceAction(action)
+	if mapped == "" {
+		return
+	}
+	result := appmetrics.ResultSuccess
+	if statusCode >= 400 {
+		result = appmetrics.ResultFailure
+	}
+	// Duplicates are successful idempotent outcomes.
+	_ = duplicate
+	appmetrics.ObserveSource(appmetrics.ProviderWebhook, mapped, result)
+}
+
+func mapSourceAction(action string) string {
+	switch Action(strings.ToLower(action)) {
+	case ActionCreate:
+		return appmetrics.ActionCreate
+	case ActionExpire:
+		return appmetrics.ActionExpire
+	case ActionTouch:
+		return appmetrics.ActionTouch
+	default:
+		// GitHub pull_request actions
+		switch strings.ToLower(action) {
+		case "opened", "reopened":
+			return appmetrics.ActionCreate
+		case "closed":
+			return appmetrics.ActionExpire
+		default:
+			return ""
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, code int, body responseBody) {

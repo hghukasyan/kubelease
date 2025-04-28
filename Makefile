@@ -93,6 +93,19 @@ test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated 
 lint: golangci-lint ## Run golangci-lint linter
 	$(GOLANGCI_LINT) run
 
+.PHONY: govulncheck
+govulncheck: ## Run govulncheck against the module
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+.PHONY: verify
+verify: manifests generate fmt vet lint govulncheck ## Full Phase 3 verification gates
+	go test $$(go list ./... | grep -v /e2e) -count=1
+	git diff --exit-code
+
+.PHONY: test-smoke
+test-smoke: ## Kind smoke test (requires kind cluster + docker)
+	./hack/kind-smoke.sh
+
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	$(GOLANGCI_LINT) run --fix

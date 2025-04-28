@@ -1,0 +1,36 @@
+{{- if and .Values.webhook.enabled .Values.webhook.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "kubelease.webhook.fullname" . }}
+  labels:
+    {{- include "kubelease.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+  {{- with .Values.webhook.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.webhook.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.webhook.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.webhook.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "kubelease.webhook.fullname" $ }}
+                port:
+                  number: {{ $.Values.webhook.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

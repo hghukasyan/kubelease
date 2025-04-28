@@ -1,0 +1,64 @@
+{{- if .Values.controller.enabled }}
+{{- if .Values.controller.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kubelease.controller.serviceAccountName" . }}
+  labels:
+    {{- include "kubelease.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+  {{- with .Values.controller.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kubelease.controller.fullname" . }}
+  labels:
+    {{- include "kubelease.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+rules:
+  - apiGroups: ["platform.kubelease.io"]
+    resources: ["environmentleases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["platform.kubelease.io"]
+    resources: ["environmentleases/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["platform.kubelease.io"]
+    resources: ["environmentleases/finalizers"]
+    verbs: ["update"]
+  - apiGroups: ["platform.kubelease.io"]
+    resources: ["environmentleasepolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["resourcequotas", "limitranges", "events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kubelease.controller.fullname" . }}
+  labels:
+    {{- include "kubelease.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kubelease.controller.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kubelease.controller.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

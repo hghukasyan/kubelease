@@ -21,6 +21,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	appmetrics "github.com/hghukasyan/kubelease/internal/metrics"
 )
 
 func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +147,13 @@ func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 	status := "ok"
 	if out.StatusCode >= 400 {
 		status = "error"
+	}
+	if mapped := mapSourceAction(ev.Action); mapped != "" {
+		result := appmetrics.ResultSuccess
+		if out.StatusCode >= 400 {
+			result = appmetrics.ResultFailure
+		}
+		appmetrics.ObserveSource(appmetrics.ProviderGitHub, mapped, result)
 	}
 	writeJSON(w, out.StatusCode, responseBody{
 		Status:    status,

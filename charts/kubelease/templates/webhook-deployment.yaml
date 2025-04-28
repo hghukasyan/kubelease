@@ -1,0 +1,92 @@
+{{- if .Values.webhook.enabled }}
+{{- $secretName := default (printf "%s-token" (include "kubelease.webhook.fullname" .)) .Values.webhook.existingSecret }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubelease.webhook.fullname" . }}
+  labels:
+    {{- include "kubelease.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  replicas: {{ .Values.webhook.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kubelease.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: webhook
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "kubelease.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: webhook
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kubelease.webhook.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.webhook.podSecurityContext | nindent 8 }}
+      containers:
+        - name: webhook
+          image: {{ include "kubelease.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/kubelease-webhook"]
+          args:
+            - --bind-address=:8082
+            - --token-secret-name={{ $secretName }}
+            - --token-secret-key=token
+            - --default-policy={{ .Values.webhook.defaultPolicy }}
+            - --namespace-generate-name={{ .Values.webhook.namespaceGenerateName }}
+            {{- if .Values.webhook.github.enabled }}
+            - --github-enabled
+            - --github-secret-name={{ $secretName }}
+            - --github-secret-key=github-webhook-secret
+            {{- if .Values.webhook.github.repoPolicies }}
+            - --github-repo-policies={{ .Values.webhook.github.repoPolicies | toJson | quote }}
+            {{- end }}
+            {{- end }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          securityContext:
+            {{- toYaml .Values.webhook.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8082
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.webhook.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.webhook.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.webhook.probes.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.webhook.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.webhook.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.webhook.probes.readiness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.webhook.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kubelease.webhook.fullname" . }}
+  labels:
+    {{- include "kubelease.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  type: {{ .Values.webhook.service.type }}
+  selector:
+    app.kubernetes.io/name: {{ include "kubelease.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: webhook
+  ports:
+    - name: http
+      port: {{ .Values.webhook.service.port }}
+      targetPort: http
+{{- end }}
