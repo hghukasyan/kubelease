@@ -28,6 +28,9 @@ func StatusEqual(a, b platformv1alpha1.EnvironmentLeaseStatus) bool {
 	if a.Phase != b.Phase || a.Namespace != b.Namespace || a.ObservedGeneration != b.ObservedGeneration {
 		return false
 	}
+	if !clusterStatusEqual(a.Cluster, b.Cluster) {
+		return false
+	}
 	if !timePtrEqual(a.CreatedAt, b.CreatedAt) ||
 		!timePtrEqual(a.ExpiresAt, b.ExpiresAt) ||
 		!timePtrEqual(a.MaximumExpiresAt, b.MaximumExpiresAt) ||
@@ -46,6 +49,16 @@ func StatusEqual(a, b platformv1alpha1.EnvironmentLeaseStatus) bool {
 		return false
 	}
 	return conditionsEqual(a.Conditions, b.Conditions)
+}
+
+func clusterStatusEqual(a, b *platformv1alpha1.ClusterStatus) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Name == b.Name
 }
 
 func effectiveEqual(a, b *platformv1alpha1.EffectiveLeaseSpec) bool {
@@ -140,6 +153,10 @@ func DeepCopyStatus(s platformv1alpha1.EnvironmentLeaseStatus) platformv1alpha1.
 	if s.EffectiveExpiresAt != nil {
 		t := *s.EffectiveExpiresAt
 		out.EffectiveExpiresAt = &t
+	}
+	if s.Cluster != nil {
+		c := *s.Cluster
+		out.Cluster = &c
 	}
 	if s.WarningsDelivered != nil {
 		out.WarningsDelivered = append([]string{}, s.WarningsDelivered...)

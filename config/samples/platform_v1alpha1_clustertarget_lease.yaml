@@ -1,0 +1,37 @@
+apiVersion: platform.kubelease.io/v1alpha1
+kind: ClusterTarget
+metadata:
+  name: dev-east
+  labels:
+    app.kubernetes.io/name: kubelease
+spec:
+  credentials:
+    secretRef:
+      name: dev-east-kubeconfig
+      namespace: kubelease-system
+      key: kubeconfig
+  labels:
+    region: us-east
+    environment: development
+  enabled: true
+---
+# Create the credential Secret first:
+# kubectl -n kubelease-system create secret generic dev-east-kubeconfig \
+#   --from-file=kubeconfig=./dev-east.kubeconfig
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLease
+metadata:
+  name: payment-pr
+  labels:
+    app.kubernetes.io/name: kubelease
+spec:
+  clusterRef:
+    name: dev-east
+  ttl: 8h
+  maxTTL: 72h
+  namespace:
+    generateName: preview-
+    labels:
+      app: payments
+  networkPolicy:
+    defaultDeny: true

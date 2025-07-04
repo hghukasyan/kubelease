@@ -11,6 +11,7 @@ KubeLease safely cleans up the managed Namespace and its supporting resources.
 Detailed docs live under [`docs/`](docs/):
 
 - [Architecture](docs/architecture.md)
+- [Multi-cluster](docs/multicluster.md)
 - [Policies](docs/policies.md)
 - [Idle expiration](docs/idle-expiration.md)
 - [Webhook integration](docs/webhook-integration.md)

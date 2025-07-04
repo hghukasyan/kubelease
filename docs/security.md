@@ -9,6 +9,9 @@
 | Quota / maxTTL bypass via webhook | Unknown JSON fields rejected; create uses policy only |
 | Protected system namespaces | Controller refuses `default` / `kube-*` |
 | Foreign Namespace adoption | Requires matching lease name **and** UID annotation |
+| Remote kubeconfig leakage | Credentials only in Secrets; ClusterTarget holds secretRef only |
+| Remote privilege escalation | Documented least-privilege remote ClusterRole (not cluster-admin) |
+| Orphaned remote Namespaces | Default `RequireRemoteCleanup` keeps finalizer while remote unreachable |
 | Signature forgery | HMAC SHA-256 (`X-Hub-Signature-256`) constant-time compare |
 | Generic webhook auth bypass | Bearer / header token vs Secret; constant-time compare |
 | Team spoofing | Generic webhook trusts authenticated caller metadata; GitHub uses payload sender/owner |
@@ -24,10 +27,16 @@ webhook service
   → get EnvironmentLeasePolicy
   → get own token Secret
 
-controller
-  → manage Namespace / ResourceQuota / LimitRange / NetworkPolicy
-  → EnvironmentLease status + finalizers
+controller (control cluster)
+  → manage local Namespace / ResourceQuota / LimitRange / NetworkPolicy
+  → EnvironmentLease + ClusterTarget status/finalizers
+  → read ClusterTarget credential Secrets
+
+remote cluster identity (kubeconfig)
+  → Namespace / ResourceQuota / LimitRange / NetworkPolicy only
 ```
+
+See [multicluster.md](multicluster.md) for example remote RBAC.
 
 ## Hardening checklist
 

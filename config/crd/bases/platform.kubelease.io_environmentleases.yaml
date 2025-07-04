@@ -21,6 +21,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.cluster.name
+      name: Cluster
+      type: string
     - jsonPath: .status.namespace
       name: Namespace
       type: string
@@ -69,6 +72,33 @@ spec:
               When PolicyRef is set, omitted fields take policy defaults. Values that
               violate policy hard limits are rejected (not silently clamped).
             properties:
+              cleanupPolicy:
+                description: |-
+                  CleanupPolicy controls finalizer behavior when remote cleanup fails.
+                  Default: RequireRemoteCleanup (do not drop the finalizer while the remote
+                  cluster is unreachable). Use BestEffort only when operators accept orphans.
+                properties:
+                  mode:
+                    default: RequireRemoteCleanup
+                    description: Mode defaults to RequireRemoteCleanup when unset.
+                    enum:
+                    - RequireRemoteCleanup
+                    - BestEffort
+                    type: string
+                type: object
+              clusterRef:
+                description: |-
+                  ClusterRef selects a ClusterTarget for remote provisioning.
+                  When omitted, the environment is created on the local (control-plane) cluster.
+                  Credentials are never stored on the lease; only the target name is referenced.
+                properties:
+                  name:
+                    description: Name of the referent.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
               idleTTL:
                 description: |-
                   IdleTTL is the inactivity window before an idle environment may expire.
@@ -228,6 +258,14 @@ spec:
           status:
             description: EnvironmentLeaseStatus defines the observed state of EnvironmentLease.
             properties:
+              cluster:
+                description: Cluster identifies the target cluster hosting the Namespace.
+                properties:
+                  name:
+                    description: Name is the ClusterTarget name, or "local" when clusterRef
+                      is omitted.
+                    type: string
+                type: object
               conditions:
                 description: Conditions represent the latest available observations
                   of the lease.

@@ -55,10 +55,11 @@ const (
 
 // Condition types for EnvironmentLease.
 const (
-	ConditionReady    = "Ready"
-	ConditionExpiring = "Expiring"
-	ConditionCleanup  = "Cleanup"
-	ConditionDegraded = "Degraded"
+	ConditionReady              = "Ready"
+	ConditionExpiring           = "Expiring"
+	ConditionCleanup            = "Cleanup"
+	ConditionDegraded           = "Degraded"
+	ConditionTargetClusterReady = "TargetClusterReady"
 )
 
 // Condition reasons.
@@ -79,7 +80,47 @@ const (
 	ReasonCleanupFailed               = "CleanupFailed"
 	ReasonRenewalRejected             = "RenewalRejected"
 	ReasonNamespaceAdoptRefused       = "NamespaceAdoptRefused"
+	ReasonTargetClusterUnavailable    = "TargetClusterUnavailable"
+	ReasonTargetNotFound              = "TargetNotFound"
+	ReasonTargetDisabled              = "TargetDisabled"
+	ReasonRemoteCleanupBlocked        = "RemoteCleanupBlocked"
 )
+
+// CleanupMode controls finalizer behavior when remote cleanup cannot complete.
+// +kubebuilder:validation:Enum=RequireRemoteCleanup;BestEffort
+type CleanupMode string
+
+const (
+	// CleanupModeRequireRemoteCleanup keeps the finalizer until remote cleanup
+	// succeeds. Prefer for correctness; may block forever if a cluster is gone.
+	CleanupModeRequireRemoteCleanup CleanupMode = "RequireRemoteCleanup"
+	// CleanupModeBestEffort removes the finalizer even if the remote cluster is
+	// unreachable (may orphan remote Namespaces).
+	CleanupModeBestEffort CleanupMode = "BestEffort"
+)
+
+// CleanupPolicy configures EnvironmentLease deletion / expiration cleanup.
+type CleanupPolicy struct {
+	// Mode defaults to RequireRemoteCleanup when unset.
+	// +optional
+	// +kubebuilder:default=RequireRemoteCleanup
+	Mode CleanupMode `json:"mode,omitempty"`
+}
+
+// EffectiveCleanupMode returns the cleanup mode, defaulting to RequireRemoteCleanup.
+func (s EnvironmentLeaseSpec) EffectiveCleanupMode() CleanupMode {
+	if s.CleanupPolicy == nil || s.CleanupPolicy.Mode == "" {
+		return CleanupModeRequireRemoteCleanup
+	}
+	return s.CleanupPolicy.Mode
+}
+
+// ClusterStatus identifies where the environment Namespace was provisioned.
+type ClusterStatus struct {
+	// Name is the ClusterTarget name, or "local" when clusterRef is omitted.
+	// +optional
+	Name string `json:"name,omitempty"`
+}
 
 // ExpirationReason explains why a lease reached effective expiration.
 // +kubebuilder:validation:Enum=TTLExpired;IdleTimeout;ManualExpiration;SourceClosed
@@ -188,6 +229,18 @@ type EnvironmentLeaseSpec struct {
 	// +optional
 	PolicyRef *LocalObjectReference `json:"policyRef,omitempty"`
 
+	// ClusterRef selects a ClusterTarget for remote provisioning.
+	// When omitted, the environment is created on the local (control-plane) cluster.
+	// Credentials are never stored on the lease; only the target name is referenced.
+	// +optional
+	ClusterRef *LocalObjectReference `json:"clusterRef,omitempty"`
+
+	// CleanupPolicy controls finalizer behavior when remote cleanup fails.
+	// Default: RequireRemoteCleanup (do not drop the finalizer while the remote
+	// cluster is unreachable). Use BestEffort only when operators accept orphans.
+	// +optional
+	CleanupPolicy *CleanupPolicy `json:"cleanupPolicy,omitempty"`
+
 	// TTL is the requested lifetime from CreatedAt.
 	// Optional when PolicyRef provides ttl.default; otherwise required.
 	// +optional
@@ -264,6 +317,10 @@ type EnvironmentLeaseStatus struct {
 	// Namespace is the name of the managed Namespace.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
+
+	// Cluster identifies the target cluster hosting the Namespace.
+	// +optional
+	Cluster *ClusterStatus `json:"cluster,omitempty"`
 
 	// CreatedAt is when the lease window started. Initialized once from
 	// metadata.creationTimestamp and never reset on controller restart.
@@ -346,6 +403,7 @@ type EffectiveLeaseSpec struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=envlease;el
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.status.cluster.name`
 // +kubebuilder:printcolumn:name="Namespace",type=string,JSONPath=`.status.namespace`
 // +kubebuilder:printcolumn:name="Expires",type=date,JSONPath=`.status.effectiveExpiresAt`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.expirationReason`

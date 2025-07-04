@@ -39,6 +39,7 @@ import (
 
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
 	"github.com/hghukasyan/kubelease/internal/controller"
+	"github.com/hghukasyan/kubelease/internal/remote"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -202,11 +203,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.EnvironmentLeaseReconciler{
-		Client: mgr.GetClient(),
+	provider := remote.NewProvider(remote.Options{
+		Hub:    mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+	})
+
+	if err = (&controller.EnvironmentLeaseReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Provider: provider,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EnvironmentLease")
+		os.Exit(1)
+	}
+	if err = (&controller.ClusterTargetReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Provider: provider,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ClusterTarget")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

@@ -4,6 +4,7 @@
 resources:
 - bases/platform.kubelease.io_environmentleases.yaml
 - bases/platform.kubelease.io_environmentleasepolicies.yaml
+- bases/platform.kubelease.io_clustertargets.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

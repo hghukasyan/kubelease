@@ -26,6 +26,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - networking.k8s.io
   resources:
   - networkpolicies
@@ -40,14 +48,7 @@ rules:
 - apiGroups:
   - platform.kubelease.io
   resources:
-  - environmentleasepolicies
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - platform.kubelease.io
-  resources:
+  - clustertargets
   - environmentleases
   verbs:
   - create
@@ -60,14 +61,24 @@ rules:
 - apiGroups:
   - platform.kubelease.io
   resources:
+  - clustertargets/finalizers
   - environmentleases/finalizers
   verbs:
   - update
 - apiGroups:
   - platform.kubelease.io
   resources:
+  - clustertargets/status
   - environmentleases/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - platform.kubelease.io
+  resources:
+  - environmentleasepolicies
+  verbs:
+  - get
+  - list
+  - watch

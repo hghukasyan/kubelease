@@ -42,13 +42,16 @@ import (
 	"github.com/hghukasyan/kubelease/internal/lease"
 	"github.com/hghukasyan/kubelease/internal/metrics"
 	"github.com/hghukasyan/kubelease/internal/policy"
+	"github.com/hghukasyan/kubelease/internal/remote"
 	"github.com/hghukasyan/kubelease/internal/resources"
 )
 
 const (
-	cleanupRequeueAfter  = 5 * time.Second
-	indexStatusNamespace = ".status.namespace"
-	indexPolicyRefName   = ".spec.policyRef.name"
+	cleanupRequeueAfter    = 5 * time.Second
+	targetUnavailableAfter = 30 * time.Second
+	remoteDriftRequeue     = 2 * time.Minute
+	indexStatusNamespace   = ".status.namespace"
+	indexPolicyRefName     = ".spec.policyRef.name"
 
 	eventEnvironmentReady = "EnvironmentProvisioned"
 	eventLeaseRenewed     = "LeaseRenewed"
@@ -67,6 +70,9 @@ type EnvironmentLeaseReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 	Clock    lease.Clock
+	// Provider builds remote cluster clients for ClusterTarget-backed leases.
+	// Required when clusterRef is set; local leases use r.Client.
+	Provider remote.Provider
 }
 
 func (r *EnvironmentLeaseReconciler) now() time.Time {
@@ -80,10 +86,12 @@ func (r *EnvironmentLeaseReconciler) now() time.Time {
 // +kubebuilder:rbac:groups=platform.kubelease.io,resources=environmentleases/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=platform.kubelease.io,resources=environmentleases/finalizers,verbs=update
 // +kubebuilder:rbac:groups=platform.kubelease.io,resources=environmentleasepolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=platform.kubelease.io,resources=clustertargets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=resourcequotas,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=limitranges,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile converges cluster state toward the EnvironmentLease desired state.
@@ -218,6 +226,14 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 	log := ctrl.LoggerFrom(ctx)
 	wasReady := lease.ConditionTrue(leaseObj, platformv1alpha1.ConditionReady)
 
+	sess, err := r.resolveTargetSession(ctx, leaseObj)
+	if err != nil {
+		return r.handleTargetError(leaseObj, err)
+	}
+	leaseObj.Status.Cluster = &platformv1alpha1.ClusterStatus{Name: sess.Name}
+	lease.SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionTrue,
+		platformv1alpha1.ReasonEnvironmentReady, fmt.Sprintf("Using cluster %s", sess.Name))
+
 	// Avoid Failed↔Provisioning flap: only mark provisioning when not already Failed
 	// unless we are starting fresh.
 	if !wasReady && leaseObj.Status.Phase != platformv1alpha1.LeasePhaseFailed {
@@ -231,12 +247,14 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 		working.Spec.NetworkPolicy = resolved.NetworkPolicy
 	}
 
-	nsName, created, err := r.ensureNamespace(ctx, leaseObj)
+	nsName, created, err := r.ensureNamespace(ctx, sess, leaseObj)
 	if err != nil {
+		r.observeOp(sess, "create", err)
 		lease.MarkFailed(leaseObj, platformv1alpha1.ReasonNamespaceCreationFailed, err.Error())
 		metrics.ProvisionFailuresTotal.Inc()
 		return ctrl.Result{}, err
 	}
+	r.observeOp(sess, "create", nil)
 	if leaseObj.Status.Namespace != nsName {
 		leaseObj.Status.Namespace = nsName
 		// Persist namespace identity immediately to avoid generateName leaks.
@@ -248,22 +266,26 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 			return ctrl.Result{}, err
 		}
 		leaseObj.Status.Effective = resolved.ToEffectiveStatus()
+		leaseObj.Status.Cluster = &platformv1alpha1.ClusterStatus{Name: sess.Name}
 	}
 	if created {
-		log.Info("provisioning environment", "lease", leaseObj.Name, "namespace", nsName)
+		log.Info("provisioning environment", "lease", leaseObj.Name, "namespace", nsName, "cluster", sess.Name)
 	}
 
-	if err := r.ensureResourceQuota(ctx, working, nsName); err != nil {
+	if err := r.ensureResourceQuota(ctx, sess, working, nsName); err != nil {
+		r.observeOp(sess, "update", err)
 		lease.MarkFailed(leaseObj, platformv1alpha1.ReasonResourceQuotaCreationFailed, err.Error())
 		metrics.ProvisionFailuresTotal.Inc()
 		return ctrl.Result{}, err
 	}
-	if err := r.ensureLimitRange(ctx, working, nsName); err != nil {
+	if err := r.ensureLimitRange(ctx, sess, working, nsName); err != nil {
+		r.observeOp(sess, "update", err)
 		lease.MarkFailed(leaseObj, platformv1alpha1.ReasonLimitRangeCreationFailed, err.Error())
 		metrics.ProvisionFailuresTotal.Inc()
 		return ctrl.Result{}, err
 	}
-	if err := r.ensureNetworkPolicy(ctx, working, nsName); err != nil {
+	if err := r.ensureNetworkPolicy(ctx, sess, working, nsName); err != nil {
+		r.observeOp(sess, "update", err)
 		lease.MarkFailed(leaseObj, platformv1alpha1.ReasonNetworkPolicyCreationFailed, err.Error())
 		metrics.ProvisionFailuresTotal.Inc()
 		return ctrl.Result{}, err
@@ -274,18 +296,23 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 
 	expiring := lease.IsExpiringWindow(leaseObj, r.now())
 	lease.MarkReady(leaseObj, expiring)
+	lease.SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionTrue,
+		platformv1alpha1.ReasonEnvironmentReady, fmt.Sprintf("Using cluster %s", sess.Name))
 
 	if !wasReady && previousPhase != platformv1alpha1.LeasePhaseActive &&
 		previousPhase != platformv1alpha1.LeasePhaseExpiring {
 		metrics.LeasesCreatedTotal.Inc()
 		if r.Recorder != nil {
 			r.Recorder.Eventf(leaseObj, corev1.EventTypeNormal, eventEnvironmentReady,
-				"Environment provisioned in namespace %s", nsName)
+				"Environment provisioned in namespace %s on cluster %s", nsName, sess.Name)
 		}
 	}
 
 	deadline := lease.EffectiveDeadline(leaseObj)
 	if deadline == nil {
+		if !sess.Local {
+			return ctrl.Result{RequeueAfter: remoteDriftRequeue}, nil
+		}
 		return ctrl.Result{}, nil
 	}
 	until := lease.NextReconcileAfter(
@@ -294,7 +321,51 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 		lease.WarningDurations(leaseObj.Spec.Warnings),
 		leaseObj.Status.WarningsDelivered,
 	)
+	if !sess.Local && (until == 0 || until > remoteDriftRequeue) {
+		until = remoteDriftRequeue
+	}
 	return ctrl.Result{RequeueAfter: until}, nil
+}
+
+func (r *EnvironmentLeaseReconciler) resolveTargetSession(
+	ctx context.Context,
+	leaseObj *platformv1alpha1.EnvironmentLease,
+) (*remote.TargetSession, error) {
+	if r.Provider == nil && leaseObj.Spec.ClusterRef != nil && leaseObj.Spec.ClusterRef.Name != "" {
+		return nil, &remote.TargetError{
+			Reason:  platformv1alpha1.ReasonTargetClusterUnavailable,
+			Message: "remote cluster provider is not configured",
+		}
+	}
+	return remote.ResolveTarget(ctx, r.Client, r.Client, r.Provider, leaseObj)
+}
+
+func (r *EnvironmentLeaseReconciler) handleTargetError(
+	leaseObj *platformv1alpha1.EnvironmentLease,
+	err error,
+) (ctrl.Result, error) {
+	reason := platformv1alpha1.ReasonTargetClusterUnavailable
+	msg := err.Error()
+	if te, ok := remote.AsTargetError(err); ok {
+		reason = te.Reason
+		msg = te.Message
+	}
+	lease.MarkFailed(leaseObj, reason, msg)
+	lease.SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionFalse, reason, msg)
+	metrics.ProvisionFailuresTotal.Inc()
+	// Do not treat as destroyed; back off instead of hot-looping.
+	return ctrl.Result{RequeueAfter: targetUnavailableAfter}, nil
+}
+
+func (r *EnvironmentLeaseReconciler) observeOp(sess *remote.TargetSession, op string, err error) {
+	if sess == nil || sess.Local {
+		return
+	}
+	if err != nil {
+		metrics.ObserveRemote(op, metrics.ResultFailure)
+		return
+	}
+	metrics.ObserveRemote(op, metrics.ResultSuccess)
 }
 
 // emitWarnings fires pending LeaseExpiring events and records delivery in status.
@@ -387,7 +458,7 @@ func (r *EnvironmentLeaseReconciler) reconcileExpired(
 		if patchErr := r.patchStatusIfChanged(ctx, leaseObj, before); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{RequeueAfter: targetUnavailableAfter}, nil
 	}
 	if !done {
 		lease.MarkCleaning(leaseObj, "Waiting for namespace deletion")
@@ -447,7 +518,8 @@ func (r *EnvironmentLeaseReconciler) reconcileDelete(
 		if patchErr := r.patchStatusIfChanged(ctx, leaseObj, before); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
-		return ctrl.Result{}, err
+		// Keep finalizer; back off while remote is unavailable (RequireRemoteCleanup).
+		return ctrl.Result{RequeueAfter: targetUnavailableAfter}, nil
 	}
 	if !done {
 		if err := r.patchStatusIfChanged(ctx, leaseObj, before); err != nil {
@@ -494,13 +566,33 @@ func (r *EnvironmentLeaseReconciler) cleanupEnvironment(
 		return false, fmt.Errorf("refusing to delete protected namespace %q", nsName)
 	}
 
+	sess, err := r.resolveTargetSession(ctx, leaseObj)
+	if err != nil {
+		mode := leaseObj.Spec.EffectiveCleanupMode()
+		if mode == platformv1alpha1.CleanupModeBestEffort {
+			ctrl.LoggerFrom(ctx).Info("best-effort cleanup: skipping remote delete",
+				"namespace", nsName, "error", err.Error())
+			return true, nil
+		}
+		lease.SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionFalse,
+			platformv1alpha1.ReasonRemoteCleanupBlocked, err.Error())
+		return false, fmt.Errorf("%s: %w", platformv1alpha1.ReasonRemoteCleanupBlocked, err)
+	}
+
 	ns := &corev1.Namespace{}
-	err := r.Get(ctx, types.NamespacedName{Name: nsName}, ns)
+	err = sess.Client.Get(ctx, types.NamespacedName{Name: nsName}, ns)
+	r.observeOp(sess, "get", err)
 	if apierrors.IsNotFound(err) {
 		return true, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("get namespace %s: %w", nsName, err)
+		mode := leaseObj.Spec.EffectiveCleanupMode()
+		if mode == platformv1alpha1.CleanupModeBestEffort {
+			ctrl.LoggerFrom(ctx).Info("best-effort cleanup: remote get failed",
+				"namespace", nsName, "error", err.Error())
+			return true, nil
+		}
+		return false, fmt.Errorf("get namespace %s on cluster %s: %w", nsName, sess.Name, err)
 	}
 
 	if !resources.OwnedByLease(ns, leaseObj.Name, string(leaseObj.UID)) {
@@ -508,8 +600,10 @@ func (r *EnvironmentLeaseReconciler) cleanupEnvironment(
 	}
 
 	if ns.DeletionTimestamp.IsZero() {
-		if err := r.Delete(ctx, ns); err != nil && !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("delete namespace %s: %w", nsName, err)
+		err := sess.Client.Delete(ctx, ns)
+		r.observeOp(sess, "delete", err)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("delete namespace %s on cluster %s: %w", nsName, sess.Name, err)
 		}
 	}
 	return false, nil
@@ -517,13 +611,14 @@ func (r *EnvironmentLeaseReconciler) cleanupEnvironment(
 
 func (r *EnvironmentLeaseReconciler) ensureNamespace(
 	ctx context.Context,
+	sess *remote.TargetSession,
 	leaseObj *platformv1alpha1.EnvironmentLease,
 ) (string, bool, error) {
 	if leaseObj.Status.Namespace != "" {
-		return r.ensureExistingNamespace(ctx, leaseObj, leaseObj.Status.Namespace)
+		return r.ensureExistingNamespace(ctx, sess, leaseObj, leaseObj.Status.Namespace)
 	}
 	if leaseObj.Spec.Namespace.Name != "" {
-		return r.ensureExistingNamespace(ctx, leaseObj, leaseObj.Spec.Namespace.Name)
+		return r.ensureExistingNamespace(ctx, sess, leaseObj, leaseObj.Spec.Namespace.Name)
 	}
 
 	ns := &corev1.Namespace{
@@ -533,7 +628,7 @@ func (r *EnvironmentLeaseReconciler) ensureNamespace(
 			Annotations:  managedAnnotations(leaseObj),
 		},
 	}
-	if err := r.Create(ctx, ns); err != nil {
+	if err := sess.Client.Create(ctx, ns); err != nil {
 		return "", false, fmt.Errorf("create namespace with generateName %q: %w",
 			leaseObj.Spec.Namespace.GenerateName, err)
 	}
@@ -551,6 +646,7 @@ func managedAnnotations(leaseObj *platformv1alpha1.EnvironmentLease) map[string]
 
 func (r *EnvironmentLeaseReconciler) ensureExistingNamespace(
 	ctx context.Context,
+	sess *remote.TargetSession,
 	leaseObj *platformv1alpha1.EnvironmentLease,
 	name string,
 ) (string, bool, error) {
@@ -560,10 +656,10 @@ func (r *EnvironmentLeaseReconciler) ensureExistingNamespace(
 	}
 
 	existing := &corev1.Namespace{}
-	err = r.Get(ctx, types.NamespacedName{Name: name}, existing)
+	err = sess.Client.Get(ctx, types.NamespacedName{Name: name}, existing)
 	if apierrors.IsNotFound(err) {
 		// Recreate same identity when status.namespace is set (drift recovery).
-		if err := r.Create(ctx, desired); err != nil {
+		if err := sess.Client.Create(ctx, desired); err != nil {
 			return "", false, fmt.Errorf("create namespace %s: %w", name, err)
 		}
 		return name, true, nil
@@ -594,7 +690,7 @@ func (r *EnvironmentLeaseReconciler) ensureExistingNamespace(
 	if mapsEqual(existing.Labels, patched.Labels) && mapsEqual(existing.Annotations, patched.Annotations) {
 		return name, false, nil
 	}
-	if err := r.Patch(ctx, patched, client.MergeFrom(existing)); err != nil {
+	if err := sess.Client.Patch(ctx, patched, client.MergeFrom(existing)); err != nil {
 		return "", false, fmt.Errorf("patch namespace %s: %w", name, err)
 	}
 	return name, false, nil
@@ -602,6 +698,7 @@ func (r *EnvironmentLeaseReconciler) ensureExistingNamespace(
 
 func (r *EnvironmentLeaseReconciler) ensureResourceQuota(
 	ctx context.Context,
+	sess *remote.TargetSession,
 	leaseObj *platformv1alpha1.EnvironmentLease,
 	namespace string,
 ) error {
@@ -609,14 +706,16 @@ func (r *EnvironmentLeaseReconciler) ensureResourceQuota(
 	if desired == nil {
 		return nil
 	}
-	if err := controllerutil.SetControllerReference(leaseObj, desired, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on ResourceQuota: %w", err)
+	if sess.SetLeaseOwner {
+		if err := controllerutil.SetControllerReference(leaseObj, desired, r.Scheme); err != nil {
+			return fmt.Errorf("set owner reference on ResourceQuota: %w", err)
+		}
 	}
 
 	existing := &corev1.ResourceQuota{}
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing)
+	err := sess.Client.Get(ctx, client.ObjectKeyFromObject(desired), existing)
 	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
+		if err := sess.Client.Create(ctx, desired); err != nil {
 			return fmt.Errorf("create ResourceQuota %s/%s: %w", namespace, desired.Name, err)
 		}
 		return nil
@@ -633,10 +732,12 @@ func (r *EnvironmentLeaseReconciler) ensureResourceQuota(
 	patched := existing.DeepCopy()
 	patched.Labels = desired.Labels
 	patched.Spec.Hard = desired.Spec.Hard
-	if err := controllerutil.SetControllerReference(leaseObj, patched, r.Scheme); err != nil {
-		return err
+	if sess.SetLeaseOwner {
+		if err := controllerutil.SetControllerReference(leaseObj, patched, r.Scheme); err != nil {
+			return err
+		}
 	}
-	if err := r.Patch(ctx, patched, client.MergeFrom(existing)); err != nil {
+	if err := sess.Client.Patch(ctx, patched, client.MergeFrom(existing)); err != nil {
 		return fmt.Errorf("patch ResourceQuota %s/%s: %w", namespace, desired.Name, err)
 	}
 	return nil
@@ -644,6 +745,7 @@ func (r *EnvironmentLeaseReconciler) ensureResourceQuota(
 
 func (r *EnvironmentLeaseReconciler) ensureLimitRange(
 	ctx context.Context,
+	sess *remote.TargetSession,
 	leaseObj *platformv1alpha1.EnvironmentLease,
 	namespace string,
 ) error {
@@ -651,14 +753,16 @@ func (r *EnvironmentLeaseReconciler) ensureLimitRange(
 	if desired == nil {
 		return nil
 	}
-	if err := controllerutil.SetControllerReference(leaseObj, desired, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on LimitRange: %w", err)
+	if sess.SetLeaseOwner {
+		if err := controllerutil.SetControllerReference(leaseObj, desired, r.Scheme); err != nil {
+			return fmt.Errorf("set owner reference on LimitRange: %w", err)
+		}
 	}
 
 	existing := &corev1.LimitRange{}
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing)
+	err := sess.Client.Get(ctx, client.ObjectKeyFromObject(desired), existing)
 	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
+		if err := sess.Client.Create(ctx, desired); err != nil {
 			return fmt.Errorf("create LimitRange %s/%s: %w", namespace, desired.Name, err)
 		}
 		return nil
@@ -670,10 +774,12 @@ func (r *EnvironmentLeaseReconciler) ensureLimitRange(
 	patched := existing.DeepCopy()
 	patched.Labels = desired.Labels
 	patched.Spec = desired.Spec
-	if err := controllerutil.SetControllerReference(leaseObj, patched, r.Scheme); err != nil {
-		return err
+	if sess.SetLeaseOwner {
+		if err := controllerutil.SetControllerReference(leaseObj, patched, r.Scheme); err != nil {
+			return err
+		}
 	}
-	if err := r.Patch(ctx, patched, client.MergeFrom(existing)); err != nil {
+	if err := sess.Client.Patch(ctx, patched, client.MergeFrom(existing)); err != nil {
 		return fmt.Errorf("patch LimitRange %s/%s: %w", namespace, desired.Name, err)
 	}
 	return nil
@@ -681,6 +787,7 @@ func (r *EnvironmentLeaseReconciler) ensureLimitRange(
 
 func (r *EnvironmentLeaseReconciler) ensureNetworkPolicy(
 	ctx context.Context,
+	sess *remote.TargetSession,
 	leaseObj *platformv1alpha1.EnvironmentLease,
 	namespace string,
 ) error {
@@ -688,14 +795,16 @@ func (r *EnvironmentLeaseReconciler) ensureNetworkPolicy(
 	if desired == nil {
 		return nil
 	}
-	if err := controllerutil.SetControllerReference(leaseObj, desired, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on NetworkPolicy: %w", err)
+	if sess.SetLeaseOwner {
+		if err := controllerutil.SetControllerReference(leaseObj, desired, r.Scheme); err != nil {
+			return fmt.Errorf("set owner reference on NetworkPolicy: %w", err)
+		}
 	}
 
 	existing := &networkingv1.NetworkPolicy{}
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing)
+	err := sess.Client.Get(ctx, client.ObjectKeyFromObject(desired), existing)
 	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
+		if err := sess.Client.Create(ctx, desired); err != nil {
 			return fmt.Errorf("create NetworkPolicy %s/%s: %w", namespace, desired.Name, err)
 		}
 		return nil
@@ -707,10 +816,12 @@ func (r *EnvironmentLeaseReconciler) ensureNetworkPolicy(
 	patched := existing.DeepCopy()
 	patched.Labels = desired.Labels
 	patched.Spec = desired.Spec
-	if err := controllerutil.SetControllerReference(leaseObj, patched, r.Scheme); err != nil {
-		return err
+	if sess.SetLeaseOwner {
+		if err := controllerutil.SetControllerReference(leaseObj, patched, r.Scheme); err != nil {
+			return err
+		}
 	}
-	if err := r.Patch(ctx, patched, client.MergeFrom(existing)); err != nil {
+	if err := sess.Client.Patch(ctx, patched, client.MergeFrom(existing)); err != nil {
 		return fmt.Errorf("patch NetworkPolicy %s/%s: %w", namespace, desired.Name, err)
 	}
 	return nil
@@ -793,6 +904,21 @@ func (r *EnvironmentLeaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		},
 	); err != nil {
 		return fmt.Errorf("index spec.policyRef.name: %w", err)
+	}
+
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&platformv1alpha1.EnvironmentLease{},
+		indexClusterRefName,
+		func(obj client.Object) []string {
+			l := obj.(*platformv1alpha1.EnvironmentLease)
+			if l.Spec.ClusterRef == nil || l.Spec.ClusterRef.Name == "" {
+				return nil
+			}
+			return []string{l.Spec.ClusterRef.Name}
+		},
+	); err != nil {
+		return fmt.Errorf("index spec.clusterRef.name: %w", err)
 	}
 
 	mapNamespace := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {

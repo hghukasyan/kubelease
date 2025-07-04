@@ -23,4 +23,12 @@ resources:
   kind: EnvironmentLeasePolicy
   path: github.com/hghukasyan/kubelease/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+  controller: true
+  domain: kubelease.io
+  group: platform
+  kind: ClusterTarget
+  path: github.com/hghukasyan/kubelease/api/v1alpha1
+  version: v1alpha1
 version: "3"

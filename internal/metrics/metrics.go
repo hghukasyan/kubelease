@@ -99,6 +99,26 @@ var (
 		Name: "kubelease_policy_rejections_total",
 		Help: "Total leases rejected for policy violations",
 	})
+
+	// ClusterTargets is the number of ClusterTarget objects by readiness.
+	// Label "ready" is bounded to true|false.
+	ClusterTargets = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubelease_cluster_targets",
+		Help: "Number of ClusterTargets by ready status",
+	}, []string{"ready"})
+
+	// RemoteOperationsTotal counts remote cluster API operations.
+	// Labels: operation=create|update|delete|get, result=success|failure.
+	// Deliberately omits target name to keep cardinality bounded.
+	RemoteOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubelease_remote_operations_total",
+		Help: "Total remote cluster operations by operation and result",
+	}, []string{"operation", "result"})
+
+	ClusterConnectionFailuresTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_cluster_connection_failures_total",
+		Help: "Total failures building or authenticating remote cluster clients",
+	})
 )
 
 func init() {
@@ -115,7 +135,15 @@ func init() {
 		IdleExpirationsTotal,
 		ManualExpirationsTotal,
 		PolicyRejectionsTotal,
+		ClusterTargets,
+		RemoteOperationsTotal,
+		ClusterConnectionFailuresTotal,
 	)
+}
+
+// ObserveRemote records a remote cluster API operation outcome.
+func ObserveRemote(operation, result string) {
+	RemoteOperationsTotal.WithLabelValues(operation, result).Inc()
 }
 
 // ObserveSource records a bounded-cardinality source event.
