@@ -17,6 +17,99 @@ control-plane cluster.
 		dev-us-east        dev-eu           gpu-test
 ```
 
+## Placement
+
+Leases need not hard-code `clusterRef`. Prefer label-based placement:
+
+```yaml
+apiVersion: platform.kubelease.io/v1alpha1
+kind: ClusterTarget
+metadata:
+  name: dev-east
+  labels:
+    kubelease.io/region: us-east
+    kubelease.io/tier: dev
+    kubelease.io/gpu: "false"
+spec:
+  credentials:
+    secretRef:
+      name: dev-east-kubeconfig
+      namespace: kubelease-system
+  maxActiveLeases: 50   # soft capacity (best-effort, not transactional)
+---
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLease
+metadata:
+  name: payment-pr
+spec:
+  ttl: 8h
+  placement:
+    selector:
+      matchLabels:
+        kubelease.io/region: us-east
+        kubelease.io/tier: dev
+  namespace:
+    generateName: preview-
+```
+
+### Precedence
+
+```text
+clusterRef set     → exact target
+placement set      → deterministic select among matching Ready targets
+neither            → local control cluster
+```
+
+`clusterRef` and `placement` are **mutually exclusive** (CEL + controller validation).
+
+### Sticky selection
+
+Chosen target is written to `status.cluster.name` and reused on every reconcile.
+
+| Stage | Behavior |
+|---|---|
+| Before Namespace exists | Unhealthy/disabled selection may be **reselected** |
+| After Namespace exists | Selection is **sticky** — no automatic migration |
+
+A live environment is never copied to another cluster. If the target fails after
+provisioning: `Ready=False` / `TargetClusterUnavailable`.
+
+### Algorithm
+
+1. Filter enabled + Ready targets
+2. Apply lease + policy label selectors (`metav1.LabelSelector`)
+3. Soft-capacity filter (`activeLeases < maxActiveLeases`)
+4. Sort by name; pick via stable hash of lease UID
+
+Hashing spreads load across matches while remaining deterministic for a lease.
+Sorted-first would pile onto the alphabetically first target.
+
+### Soft capacity
+
+`maxActiveLeases` / `status.capacity.activeLeases` are **soft**. Concurrent
+reconciles can race past the ceiling — do not treat them as hard admission.
+
+### Policy
+
+`EnvironmentLeasePolicy.spec.placement.selector` constrains both explicit
+`clusterRef` and lease placement. When a lease omits both, the policy selector
+is used as the default placement.
+
+### No match
+
+`Phase=Pending`, `Ready=False`, `reason=NoMatchingCluster`, requeue with backoff.
+A new matching ClusterTarget recovers automatically.
+
+### CLI
+
+```bash
+kubectl kubelease cluster list
+kubectl kubelease cluster get dev-east
+kubectl kubelease get payment-pr   # shows Cluster / Placement
+```
+
+---
+
 ## Design choices
 
 | Topic | Choice |
@@ -25,7 +118,9 @@ control-plane cluster.
 | Credentials | Secret reference only — never embed kubeconfig in the CR |
 | Auth today | kubeconfig in a Secret (`credentials.secretRef`) |
 | Future auth | SA token / workload identity can extend `ClusterCredentials` without API break for Secret refs |
-| Local default | omit `spec.clusterRef` → provision on the **local** control cluster (`status.cluster.name=local`) |
+| Local default | omit `clusterRef` and `placement` → local control cluster |
+| Placement | `metav1.LabelSelector` on ClusterTarget scheduling labels; sticky in status |
+| Capacity | soft `maxActiveLeases` only (not CPU/memory packing) |
 | Cleanup | default `cleanupPolicy.mode=RequireRemoteCleanup` — finalizer stays until remote Namespace is gone |
 
 ## ClusterTarget

@@ -39,6 +39,7 @@ import (
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
 	"github.com/hghukasyan/kubelease/internal/lease"
 	"github.com/hghukasyan/kubelease/internal/metrics"
+	"github.com/hghukasyan/kubelease/internal/placement"
 	"github.com/hghukasyan/kubelease/internal/remote"
 )
 
@@ -203,11 +204,36 @@ func (r *ClusterTargetReconciler) reconcileHealth(ctx context.Context, target *p
 	target.Status.KubernetesVersion = ver
 	r.setTargetConditions(target, true, true, true,
 		platformv1alpha1.ReasonClusterReachable, "Remote API reachable")
+	r.refreshCapacity(ctx, target)
 	target.Status.ObservedGeneration = target.Generation
 	if err := r.Status().Update(ctx, target); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: clusterTargetHealthAfter}, nil
+}
+
+func (r *ClusterTargetReconciler) refreshCapacity(ctx context.Context, target *platformv1alpha1.ClusterTarget) {
+	active := int32(0)
+	var list platformv1alpha1.EnvironmentLeaseList
+	if err := r.List(ctx, &list, client.MatchingFields{placement.StatusClusterNameIndex: target.Name}); err != nil {
+		// Fallback soft count without index.
+		counts, err := placement.CountActiveLeases(ctx, r.Client)
+		if err == nil {
+			active = counts[target.Name]
+		}
+	} else {
+		for i := range list.Items {
+			l := &list.Items[i]
+			if l.DeletionTimestamp.IsZero() && l.Status.Phase != platformv1alpha1.LeasePhaseExpired {
+				active++
+			}
+		}
+	}
+	cap := &platformv1alpha1.ClusterCapacityStatus{ActiveLeases: active}
+	if target.Spec.MaxActiveLeases != nil {
+		cap.MaxLeases = target.Spec.MaxActiveLeases
+	}
+	target.Status.Capacity = cap
 }
 
 func refreshClusterTargetMetrics(ctx context.Context, c client.Client) {

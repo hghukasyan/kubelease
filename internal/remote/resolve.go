@@ -41,20 +41,15 @@ type TargetSession struct {
 	SetLeaseOwner bool
 }
 
-// ResolveTarget picks the local manager client or a remote ClusterTarget client.
-//
-// Semantics:
-//
-//	clusterRef omitted → local control-plane cluster
-//	clusterRef set     → ClusterTarget credentials → remote client
-func ResolveTarget(
+// ResolveNamedTarget builds a session for "local" or a named ClusterTarget.
+func ResolveNamedTarget(
 	ctx context.Context,
 	hub client.Client,
 	local client.Client,
 	provider Provider,
-	leaseObj *platformv1alpha1.EnvironmentLease,
+	name string,
 ) (*TargetSession, error) {
-	if leaseObj.Spec.ClusterRef == nil || leaseObj.Spec.ClusterRef.Name == "" {
+	if name == "" || name == platformv1alpha1.LocalClusterName {
 		return &TargetSession{
 			Name:          platformv1alpha1.LocalClusterName,
 			Client:        local,
@@ -63,7 +58,6 @@ func ResolveTarget(
 		}, nil
 	}
 
-	name := leaseObj.Spec.ClusterRef.Name
 	target := &platformv1alpha1.ClusterTarget{}
 	if err := hub.Get(ctx, types.NamespacedName{Name: name}, target); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -92,6 +86,12 @@ func ResolveTarget(
 			Err:     ErrTargetDisabled,
 		}
 	}
+	if provider == nil {
+		return nil, &TargetError{
+			Reason:  platformv1alpha1.ReasonTargetClusterUnavailable,
+			Message: "remote cluster provider is not configured",
+		}
+	}
 
 	cl, err := provider.ClientFor(ctx, target)
 	if err != nil {
@@ -111,6 +111,28 @@ func ResolveTarget(
 		Local:         false,
 		SetLeaseOwner: false,
 	}, nil
+}
+
+// ResolveTarget picks the local manager client or a remote ClusterTarget client.
+//
+// Semantics:
+//
+//	clusterRef omitted → local control-plane cluster
+//	clusterRef set     → ClusterTarget credentials → remote client
+//
+// Prefer ResolveNamedTarget after placement.Decide when using selectors.
+func ResolveTarget(
+	ctx context.Context,
+	hub client.Client,
+	local client.Client,
+	provider Provider,
+	leaseObj *platformv1alpha1.EnvironmentLease,
+) (*TargetSession, error) {
+	name := ""
+	if leaseObj.Spec.ClusterRef != nil {
+		name = leaseObj.Spec.ClusterRef.Name
+	}
+	return ResolveNamedTarget(ctx, hub, local, provider, name)
 }
 
 // TargetError classifies cluster-target resolution failures for Conditions.

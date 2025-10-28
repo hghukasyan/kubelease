@@ -1,0 +1,134 @@
+/*
+Copyright 2026 KubeLease Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package cli
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"text/tabwriter"
+
+	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
+)
+
+func newClusterCommand(gf *GlobalFlags) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "cluster",
+		Short: "Inspect ClusterTarget placement targets",
+	}
+	cmd.AddCommand(newClusterListCommand(gf))
+	cmd.AddCommand(newClusterGetCommand(gf))
+	return cmd
+}
+
+func newClusterListCommand(gf *GlobalFlags) *cobra.Command {
+	return &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List ClusterTargets",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c, err := newClient(gf)
+			if err != nil {
+				return err
+			}
+			return runClusterList(cmd.Context(), c, gf)
+		},
+	}
+}
+
+func newClusterGetCommand(gf *GlobalFlags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "get NAME",
+		Short: "Get ClusterTarget details",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := newClient(gf)
+			if err != nil {
+				return err
+			}
+			return runClusterGet(cmd.Context(), c, gf, args[0])
+		},
+	}
+}
+
+func runClusterList(ctx context.Context, c client.Client, gf *GlobalFlags) error {
+	var list platformv1alpha1.ClusterTargetList
+	if err := c.List(ctx, &list); err != nil {
+		return err
+	}
+	if isMachineOutput(gf.Output) {
+		return printObject(&list, gf.Output)
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tREADY\tREGION\tACTIVE LEASES")
+	for i := range list.Items {
+		t := &list.Items[i]
+		ready := "False"
+		if meta.IsStatusConditionTrue(t.Status.Conditions, platformv1alpha1.ClusterTargetConditionReady) {
+			ready = "True"
+		}
+		region := t.SchedulingLabels()["kubelease.io/region"]
+		if region == "" {
+			region = t.SchedulingLabels()["region"]
+		}
+		active := int32(0)
+		if t.Status.Capacity != nil {
+			active = t.Status.Capacity.ActiveLeases
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\n", t.Name, ready, region, active)
+	}
+	return w.Flush()
+}
+
+func runClusterGet(ctx context.Context, c client.Client, gf *GlobalFlags, name string) error {
+	target := &platformv1alpha1.ClusterTarget{}
+	if err := c.Get(ctx, types.NamespacedName{Name: name}, target); err != nil {
+		return err
+	}
+	if isMachineOutput(gf.Output) {
+		return printObject(target, gf.Output)
+	}
+
+	ready := "False"
+	if meta.IsStatusConditionTrue(target.Status.Conditions, platformv1alpha1.ClusterTargetConditionReady) {
+		ready = "True"
+	}
+	fmt.Printf("Name:               %s\n", target.Name)
+	fmt.Printf("Ready:              %s\n", ready)
+	fmt.Printf("Enabled:            %t\n", target.Spec.IsEnabled())
+	fmt.Printf("Kubernetes version: %s\n", target.Status.KubernetesVersion)
+	if target.Status.Capacity != nil {
+		fmt.Printf("Active leases:      %d\n", target.Status.Capacity.ActiveLeases)
+		if target.Status.Capacity.MaxLeases != nil {
+			fmt.Printf("Max leases:         %d (soft)\n", *target.Status.Capacity.MaxLeases)
+		}
+	}
+	labels := target.SchedulingLabels()
+	if len(labels) > 0 {
+		fmt.Println("Scheduling labels:")
+		for k, v := range labels {
+			fmt.Printf("  %s=%s\n", k, v)
+		}
+	}
+	return nil
+}

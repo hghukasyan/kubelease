@@ -63,7 +63,7 @@ test: manifests generate fmt vet setup-envtest ## Run unit + envtest suites.
 
 .PHONY: test-unit
 test-unit: ## Run unit tests only (no envtest).
-	go test ./internal/lease/ ./internal/resources/ ./internal/cli/ ./api/... -count=1
+	go test ./internal/lease/ ./internal/resources/ ./internal/cli/ ./internal/placement/ ./internal/remote/ ./api/... -count=1
 
 .PHONY: test-integration
 test-integration: manifests generate setup-envtest ## Run envtest controller tests.

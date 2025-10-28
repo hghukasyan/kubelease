@@ -38,6 +38,9 @@ func ValidateSpec(leaseObj *platformv1alpha1.EnvironmentLease) error {
 	if leaseObj.Status.Namespace != "" && resources.IsProtectedNamespace(leaseObj.Status.Namespace) {
 		return fmt.Errorf("cannot manage protected namespace %q", leaseObj.Status.Namespace)
 	}
+	if leaseObj.Spec.ClusterRef != nil && leaseObj.Spec.ClusterRef.Name != "" && leaseObj.Spec.Placement != nil {
+		return fmt.Errorf("clusterRef and placement are mutually exclusive")
+	}
 	return nil
 }
 

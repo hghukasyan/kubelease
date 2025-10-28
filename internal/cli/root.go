@@ -61,6 +61,7 @@ Install the binary on PATH as kubectl-kubelease so kubectl can discover it:
 	root.AddCommand(newCreateCommand(gf))
 	root.AddCommand(newListCommand(gf))
 	root.AddCommand(newGetCommand(gf))
+	root.AddCommand(newClusterCommand(gf))
 	root.AddCommand(newExtendCommand(gf))
 	root.AddCommand(newTouchCommand(gf))
 	root.AddCommand(newExpireCommand(gf))

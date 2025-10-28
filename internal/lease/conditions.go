@@ -74,6 +74,14 @@ func MarkReady(leaseObj *platformv1alpha1.EnvironmentLease, expiring bool) {
 		platformv1alpha1.ReasonEnvironmentReady, "Healthy")
 }
 
+// MarkPending sets Pending phase while waiting for a matching ClusterTarget.
+func MarkPending(leaseObj *platformv1alpha1.EnvironmentLease, reason, message string) {
+	leaseObj.Status.Phase = platformv1alpha1.LeasePhasePending
+	SetCondition(leaseObj, platformv1alpha1.ConditionReady, metav1.ConditionFalse, reason, message)
+	SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionFalse, reason, message)
+	SetCondition(leaseObj, platformv1alpha1.ConditionDegraded, metav1.ConditionFalse, reason, message)
+}
+
 // MarkFailed sets Failed phase and Ready=False with the given reason.
 func MarkFailed(leaseObj *platformv1alpha1.EnvironmentLease, reason, message string) {
 	leaseObj.Status.Phase = platformv1alpha1.LeasePhaseFailed

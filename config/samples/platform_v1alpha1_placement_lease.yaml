@@ -1,0 +1,38 @@
+apiVersion: platform.kubelease.io/v1alpha1
+kind: ClusterTarget
+metadata:
+  name: dev-east
+  labels:
+    app.kubernetes.io/name: kubelease
+    kubelease.io/region: us-east
+    kubelease.io/tier: dev
+    kubelease.io/gpu: "false"
+spec:
+  credentials:
+    secretRef:
+      name: dev-east-kubeconfig
+      namespace: kubelease-system
+      key: kubeconfig
+  maxActiveLeases: 50
+  enabled: true
+---
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLease
+metadata:
+  name: payment-pr-placed
+  labels:
+    app.kubernetes.io/name: kubelease
+spec:
+  ttl: 8h
+  maxTTL: 72h
+  placement:
+    selector:
+      matchLabels:
+        kubelease.io/region: us-east
+        kubelease.io/tier: dev
+  namespace:
+    generateName: preview-
+    labels:
+      app: payments
+  networkPolicy:
+    defaultDeny: true

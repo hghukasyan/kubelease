@@ -24,6 +24,9 @@ spec:
     - jsonPath: .status.kubernetesVersion
       name: Version
       type: string
+    - jsonPath: .status.capacity.activeLeases
+      name: Leases
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -98,9 +101,17 @@ spec:
                 additionalProperties:
                   type: string
                 description: |-
-                  Labels are free-form selector labels for the target (region, env, etc.).
+                  Labels are optional scheduling labels merged with metadata.labels for
+                  placement matching. Prefer metadata.labels with kubelease.io/* keys.
                   Not copied onto remote Namespaces automatically.
                 type: object
+              maxActiveLeases:
+                description: |-
+                  MaxActiveLeases is a soft capacity ceiling for placement.
+                  Counts are best-effort (not transactional); races may slightly exceed this.
+                format: int32
+                minimum: 0
+                type: integer
             required:
             - credentials
             type: object
@@ -108,6 +119,20 @@ spec:
             description: ClusterTargetStatus is the observed health of a remote cluster
               connection.
             properties:
+              capacity:
+                description: Capacity tracks soft lease-count usage for placement.
+                properties:
+                  activeLeases:
+                    description: |-
+                      ActiveLeases is the soft count of EnvironmentLeases with status.cluster.name
+                      equal to this target (best-effort).
+                    format: int32
+                    type: integer
+                  maxLeases:
+                    description: MaxLeases mirrors Spec.MaxActiveLeases when set.
+                    format: int32
+                    type: integer
+                type: object
               conditions:
                 description: Conditions represent the latest available observations
                   of the target.

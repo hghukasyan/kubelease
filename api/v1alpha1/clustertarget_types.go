@@ -82,10 +82,17 @@ type ClusterTargetSpec struct {
 	// +kubebuilder:validation:Required
 	Credentials ClusterCredentials `json:"credentials"`
 
-	// Labels are free-form selector labels for the target (region, env, etc.).
+	// Labels are optional scheduling labels merged with metadata.labels for
+	// placement matching. Prefer metadata.labels with kubelease.io/* keys.
 	// Not copied onto remote Namespaces automatically.
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
+
+	// MaxActiveLeases is a soft capacity ceiling for placement.
+	// Counts are best-effort (not transactional); races may slightly exceed this.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	MaxActiveLeases *int32 `json:"maxActiveLeases,omitempty"`
 
 	// Enabled, when false, rejects new/ongoing provisioning against this target.
 	// Defaults to true when omitted.
@@ -101,11 +108,27 @@ func (s ClusterTargetSpec) IsEnabled() bool {
 	return *s.Enabled
 }
 
+// ClusterCapacityStatus is lightweight lease-count capacity (not CPU/memory).
+type ClusterCapacityStatus struct {
+	// ActiveLeases is the soft count of EnvironmentLeases with status.cluster.name
+	// equal to this target (best-effort).
+	// +optional
+	ActiveLeases int32 `json:"activeLeases,omitempty"`
+
+	// MaxLeases mirrors Spec.MaxActiveLeases when set.
+	// +optional
+	MaxLeases *int32 `json:"maxLeases,omitempty"`
+}
+
 // ClusterTargetStatus is the observed health of a remote cluster connection.
 type ClusterTargetStatus struct {
 	// KubernetesVersion is the remote server version when reachable.
 	// +optional
 	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
+
+	// Capacity tracks soft lease-count usage for placement.
+	// +optional
+	Capacity *ClusterCapacityStatus `json:"capacity,omitempty"`
 
 	// ObservedGeneration is the most recent generation observed.
 	// +optional
@@ -118,11 +141,25 @@ type ClusterTargetStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// SchedulingLabels returns labels used for placement: metadata.labels overlay
+// spec.labels (metadata wins on key conflict).
+func (t *ClusterTarget) SchedulingLabels() map[string]string {
+	out := map[string]string{}
+	for k, v := range t.Spec.Labels {
+		out[k] = v
+	}
+	for k, v := range t.Labels {
+		out[k] = v
+	}
+	return out
+}
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=ctarget;cltarget
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.status.kubernetesVersion`
+// +kubebuilder:printcolumn:name="Leases",type=integer,JSONPath=`.status.capacity.activeLeases`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // ClusterTarget registers a remote Kubernetes cluster for EnvironmentLease provisioning.

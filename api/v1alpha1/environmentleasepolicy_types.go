@@ -97,6 +97,13 @@ type EnvironmentLeasePolicySpec struct {
 	// NetworkPolicy configures NetworkPolicy defaults/requirements.
 	// +optional
 	NetworkPolicy *NetworkPolicyPolicy `json:"networkPolicy,omitempty"`
+
+	// Placement constrains which ClusterTargets leases may use.
+	// When set, explicit clusterRef and placement selectors must land on a
+	// target matching this selector. When a lease omits both clusterRef and
+	// placement, this selector is used as the default placement.
+	// +optional
+	Placement *PlacementSpec `json:"placement,omitempty"`
 }
 
 // EnvironmentLeasePolicyStatus is reserved for observed policy state.

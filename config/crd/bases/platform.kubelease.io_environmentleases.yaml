@@ -71,6 +71,13 @@ spec:
 
               When PolicyRef is set, omitted fields take policy defaults. Values that
               violate policy hard limits are rejected (not silently clamped).
+
+              Cluster targeting precedence:
+               1. clusterRef → exact ClusterTarget
+               2. placement → deterministic selector against ClusterTargets
+               3. neither → local control-plane cluster
+
+              clusterRef and placement are mutually exclusive.
             properties:
               cleanupPolicy:
                 description: |-
@@ -89,8 +96,10 @@ spec:
               clusterRef:
                 description: |-
                   ClusterRef selects a ClusterTarget for remote provisioning.
-                  When omitted, the environment is created on the local (control-plane) cluster.
+                  When omitted (and placement is also omitted), the environment is created
+                  on the local (control-plane) cluster.
                   Credentials are never stored on the lease; only the target name is referenced.
+                  Mutually exclusive with Placement.
                 properties:
                   name:
                     description: Name of the referent.
@@ -201,6 +210,61 @@ spec:
                     description: Team is the owning team.
                     type: string
                 type: object
+              placement:
+                description: |-
+                  Placement selects a ClusterTarget by label selector when ClusterRef is omitted.
+                  Selection is persisted in status.cluster.name and remains sticky after
+                  provisioning begins. Mutually exclusive with ClusterRef.
+                properties:
+                  selector:
+                    description: |-
+                      Selector matches ClusterTarget scheduling labels (prefer metadata.labels
+                      with kubelease.io/* keys; spec.labels are also considered).
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
               policyRef:
                 description: PolicyRef references a cluster-scoped EnvironmentLeasePolicy.
                 properties:
@@ -255,6 +319,9 @@ spec:
             required:
             - namespace
             type: object
+            x-kubernetes-validations:
+            - message: clusterRef and placement are mutually exclusive
+              rule: '!(has(self.clusterRef) && has(self.placement))'
           status:
             description: EnvironmentLeaseStatus defines the observed state of EnvironmentLease.
             properties:
@@ -262,8 +329,9 @@ spec:
                 description: Cluster identifies the target cluster hosting the Namespace.
                 properties:
                   name:
-                    description: Name is the ClusterTarget name, or "local" when clusterRef
-                      is omitted.
+                    description: |-
+                      Name is the ClusterTarget name, or "local" when clusterRef/placement
+                      resolved to the control-plane cluster.
                     type: string
                 type: object
               conditions:

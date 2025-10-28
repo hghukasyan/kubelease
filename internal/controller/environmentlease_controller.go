@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -41,6 +42,7 @@ import (
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
 	"github.com/hghukasyan/kubelease/internal/lease"
 	"github.com/hghukasyan/kubelease/internal/metrics"
+	"github.com/hghukasyan/kubelease/internal/placement"
 	"github.com/hghukasyan/kubelease/internal/policy"
 	"github.com/hghukasyan/kubelease/internal/remote"
 	"github.com/hghukasyan/kubelease/internal/resources"
@@ -191,7 +193,7 @@ func (r *EnvironmentLeaseReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return r.reconcileExpired(ctx, leaseObj, before, previousPhase)
 	}
 
-	result, err := r.reconcileActive(ctx, leaseObj, previousPhase, resolved)
+	result, err := r.reconcileActive(ctx, leaseObj, previousPhase, resolved, pol)
 	lease.EnsureObservedGeneration(leaseObj)
 	if patchErr := r.patchStatusIfChanged(ctx, leaseObj, before); patchErr != nil {
 		return ctrl.Result{}, patchErr
@@ -222,17 +224,35 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 	leaseObj *platformv1alpha1.EnvironmentLease,
 	previousPhase platformv1alpha1.LeasePhase,
 	resolved policy.Resolved,
+	pol *platformv1alpha1.EnvironmentLeasePolicy,
 ) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
 	wasReady := lease.ConditionTrue(leaseObj, platformv1alpha1.ConditionReady)
 
-	sess, err := r.resolveTargetSession(ctx, leaseObj)
+	sess, result, err := r.resolveTargetSessionForProvision(ctx, leaseObj, pol)
+	if result != nil {
+		return *result, err
+	}
 	if err != nil {
 		return r.handleTargetError(leaseObj, err)
 	}
 	leaseObj.Status.Cluster = &platformv1alpha1.ClusterStatus{Name: sess.Name}
 	lease.SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionTrue,
 		platformv1alpha1.ReasonEnvironmentReady, fmt.Sprintf("Using cluster %s", sess.Name))
+
+	// Persist sticky cluster selection before provisioning when newly decided.
+	if previousPhase != platformv1alpha1.LeasePhaseActive &&
+		previousPhase != platformv1alpha1.LeasePhaseExpiring &&
+		leaseObj.Status.Namespace == "" {
+		if err := r.Status().Update(ctx, leaseObj); err != nil {
+			return ctrl.Result{}, fmt.Errorf("persist status.cluster: %w", err)
+		}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(leaseObj), leaseObj); err != nil {
+			return ctrl.Result{}, err
+		}
+		leaseObj.Status.Effective = resolved.ToEffectiveStatus()
+		leaseObj.Status.Cluster = &platformv1alpha1.ClusterStatus{Name: sess.Name}
+	}
 
 	// Avoid Failed↔Provisioning flap: only mark provisioning when not already Failed
 	// unless we are starting fresh.
@@ -327,17 +347,53 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 	return ctrl.Result{RequeueAfter: until}, nil
 }
 
+func (r *EnvironmentLeaseReconciler) resolveTargetSessionForProvision(
+	ctx context.Context,
+	leaseObj *platformv1alpha1.EnvironmentLease,
+	pol *platformv1alpha1.EnvironmentLeasePolicy,
+) (*remote.TargetSession, *ctrl.Result, error) {
+	counts, err := placement.CountActiveLeases(ctx, r.Client)
+	if err != nil {
+		return nil, nil, err
+	}
+	decision, err := placement.Decide(ctx, r.Client, leaseObj, pol, placement.Options{
+		ActiveLeaseCounts: counts,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), platformv1alpha1.ReasonPolicyViolation) {
+			lease.MarkFailed(leaseObj, platformv1alpha1.ReasonPolicyViolation, err.Error())
+			metrics.ProvisionFailuresTotal.Inc()
+			metrics.PolicyRejectionsTotal.Inc()
+			return nil, &ctrl.Result{}, nil
+		}
+		return nil, nil, err
+	}
+	if decision.Pending {
+		lease.MarkPending(leaseObj, platformv1alpha1.ReasonNoMatchingCluster, decision.Message)
+		lease.SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionFalse,
+			platformv1alpha1.ReasonNoMatchingCluster, decision.Message)
+		return nil, &ctrl.Result{RequeueAfter: targetUnavailableAfter}, nil
+	}
+
+	leaseObj.Status.Cluster = &platformv1alpha1.ClusterStatus{Name: decision.ClusterName}
+	sess, err := remote.ResolveNamedTarget(ctx, r.Client, r.Client, r.Provider, decision.ClusterName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sess, nil, nil
+}
+
 func (r *EnvironmentLeaseReconciler) resolveTargetSession(
 	ctx context.Context,
 	leaseObj *platformv1alpha1.EnvironmentLease,
 ) (*remote.TargetSession, error) {
-	if r.Provider == nil && leaseObj.Spec.ClusterRef != nil && leaseObj.Spec.ClusterRef.Name != "" {
-		return nil, &remote.TargetError{
-			Reason:  platformv1alpha1.ReasonTargetClusterUnavailable,
-			Message: "remote cluster provider is not configured",
-		}
+	name := platformv1alpha1.LocalClusterName
+	if leaseObj.Spec.ClusterRef != nil && leaseObj.Spec.ClusterRef.Name != "" {
+		name = leaseObj.Spec.ClusterRef.Name
+	} else if leaseObj.Status.Cluster != nil && leaseObj.Status.Cluster.Name != "" {
+		name = leaseObj.Status.Cluster.Name
 	}
-	return remote.ResolveTarget(ctx, r.Client, r.Client, r.Provider, leaseObj)
+	return remote.ResolveNamedTarget(ctx, r.Client, r.Client, r.Provider, name)
 }
 
 func (r *EnvironmentLeaseReconciler) handleTargetError(
@@ -921,6 +977,21 @@ func (r *EnvironmentLeaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index spec.clusterRef.name: %w", err)
 	}
 
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&platformv1alpha1.EnvironmentLease{},
+		placement.StatusClusterNameIndex,
+		func(obj client.Object) []string {
+			l := obj.(*platformv1alpha1.EnvironmentLease)
+			if l.Status.Cluster == nil || l.Status.Cluster.Name == "" {
+				return nil
+			}
+			return []string{l.Status.Cluster.Name}
+		},
+	); err != nil {
+		return fmt.Errorf("index status.cluster.name: %w", err)
+	}
+
 	mapNamespace := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 		labels := obj.GetLabels()
 		leaseName := labels[platformv1alpha1.LabelLease]
@@ -950,6 +1021,46 @@ func (r *EnvironmentLeaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return reqs
 	})
 
+	mapClusterTarget := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		name := obj.GetName()
+		seen := map[string]struct{}{}
+		var reqs []reconcile.Request
+		add := func(n string) {
+			if _, ok := seen[n]; ok {
+				return
+			}
+			seen[n] = struct{}{}
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: n}})
+		}
+		var assigned platformv1alpha1.EnvironmentLeaseList
+		if err := r.List(ctx, &assigned, client.MatchingFields{placement.StatusClusterNameIndex: name}); err == nil {
+			for i := range assigned.Items {
+				add(assigned.Items[i].Name)
+			}
+		}
+		var refs platformv1alpha1.EnvironmentLeaseList
+		if err := r.List(ctx, &refs, client.MatchingFields{indexClusterRefName: name}); err == nil {
+			for i := range refs.Items {
+				add(refs.Items[i].Name)
+			}
+		}
+		// Waiting for placement: Pending with placement set (bounded by listing Pending only).
+		var pending platformv1alpha1.EnvironmentLeaseList
+		if err := r.List(ctx, &pending); err == nil {
+			for i := range pending.Items {
+				l := &pending.Items[i]
+				if l.Status.Phase != platformv1alpha1.LeasePhasePending {
+					continue
+				}
+				if l.Spec.Placement == nil && (l.Spec.ClusterRef == nil || l.Spec.ClusterRef.Name == "") {
+					continue
+				}
+				add(l.Name)
+			}
+		}
+		return reqs
+	})
+
 	nsPred := predicate.NewPredicateFuncs(func(obj client.Object) bool {
 		labels := obj.GetLabels()
 		return labels[platformv1alpha1.LabelManagedBy] == platformv1alpha1.ManagedByValue &&
@@ -963,6 +1074,7 @@ func (r *EnvironmentLeaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&networkingv1.NetworkPolicy{}).
 		Watches(&corev1.Namespace{}, mapNamespace, builder.WithPredicates(nsPred)).
 		Watches(&platformv1alpha1.EnvironmentLeasePolicy{}, mapPolicy).
+		Watches(&platformv1alpha1.ClusterTarget{}, mapClusterTarget).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).
 		Named("environmentlease").
 		Complete(r)

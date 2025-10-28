@@ -56,6 +56,15 @@ func runGet(ctx context.Context, c client.Client, gf *GlobalFlags, name string) 
 	now := time.Now()
 	fmt.Printf("Name:               %s\n", leaseObj.Name)
 	fmt.Printf("Namespace:          %s\n", leaseObj.Status.Namespace)
+	if leaseObj.Status.Cluster != nil && leaseObj.Status.Cluster.Name != "" {
+		fmt.Printf("Cluster:            %s\n", leaseObj.Status.Cluster.Name)
+	}
+	if leaseObj.Spec.ClusterRef != nil && leaseObj.Spec.ClusterRef.Name != "" {
+		fmt.Printf("ClusterRef:         %s\n", leaseObj.Spec.ClusterRef.Name)
+	}
+	if leaseObj.Spec.Placement != nil && leaseObj.Spec.Placement.Selector != nil {
+		fmt.Printf("Placement:          %v\n", leaseObj.Spec.Placement.Selector.MatchLabels)
+	}
 	fmt.Printf("Owner:              %s\n", leaseObj.Spec.Owner.Name)
 	fmt.Printf("Team:               %s\n", leaseObj.Spec.Owner.Team)
 	fmt.Printf("Status:             %s\n", leaseObj.Status.Phase)

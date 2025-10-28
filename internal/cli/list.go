@@ -56,7 +56,7 @@ func runList(ctx context.Context, c client.Client, gf *GlobalFlags) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "NAME\tNAMESPACE\tOWNER\tEXPIRES IN\tSTATUS")
+	_, _ = fmt.Fprintln(w, "NAME\tCLUSTER\tNAMESPACE\tOWNER\tEXPIRES IN\tSTATUS")
 	now := time.Now()
 	for i := range list.Items {
 		item := &list.Items[i]
@@ -72,8 +72,12 @@ func runList(ctx context.Context, c client.Client, gf *GlobalFlags) error {
 		if phase == "" {
 			phase = "Pending"
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			item.Name, item.Status.Namespace, owner, expires, phase)
+		cluster := "-"
+		if item.Status.Cluster != nil && item.Status.Cluster.Name != "" {
+			cluster = item.Status.Cluster.Name
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			item.Name, cluster, item.Status.Namespace, owner, expires, phase)
 	}
 	return w.Flush()
 }

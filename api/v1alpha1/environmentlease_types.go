@@ -84,6 +84,8 @@ const (
 	ReasonTargetNotFound              = "TargetNotFound"
 	ReasonTargetDisabled              = "TargetDisabled"
 	ReasonRemoteCleanupBlocked        = "RemoteCleanupBlocked"
+	ReasonNoMatchingCluster           = "NoMatchingCluster"
+	ReasonPlacementPending            = "PlacementPending"
 )
 
 // CleanupMode controls finalizer behavior when remote cleanup cannot complete.
@@ -117,9 +119,19 @@ func (s EnvironmentLeaseSpec) EffectiveCleanupMode() CleanupMode {
 
 // ClusterStatus identifies where the environment Namespace was provisioned.
 type ClusterStatus struct {
-	// Name is the ClusterTarget name, or "local" when clusterRef is omitted.
+	// Name is the ClusterTarget name, or "local" when clusterRef/placement
+	// resolved to the control-plane cluster.
 	// +optional
 	Name string `json:"name,omitempty"`
+}
+
+// PlacementSpec selects a ClusterTarget via label selectors.
+// Mutually exclusive with clusterRef.
+type PlacementSpec struct {
+	// Selector matches ClusterTarget scheduling labels (prefer metadata.labels
+	// with kubelease.io/* keys; spec.labels are also considered).
+	// +optional
+	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 }
 
 // ExpirationReason explains why a lease reached effective expiration.
@@ -224,16 +236,32 @@ type NetworkPolicySpec struct {
 //
 // When PolicyRef is set, omitted fields take policy defaults. Values that
 // violate policy hard limits are rejected (not silently clamped).
+//
+// Cluster targeting precedence:
+//  1. clusterRef → exact ClusterTarget
+//  2. placement → deterministic selector against ClusterTargets
+//  3. neither → local control-plane cluster
+//
+// clusterRef and placement are mutually exclusive.
+// +kubebuilder:validation:XValidation:rule="!(has(self.clusterRef) && has(self.placement))",message="clusterRef and placement are mutually exclusive"
 type EnvironmentLeaseSpec struct {
 	// PolicyRef references a cluster-scoped EnvironmentLeasePolicy.
 	// +optional
 	PolicyRef *LocalObjectReference `json:"policyRef,omitempty"`
 
 	// ClusterRef selects a ClusterTarget for remote provisioning.
-	// When omitted, the environment is created on the local (control-plane) cluster.
+	// When omitted (and placement is also omitted), the environment is created
+	// on the local (control-plane) cluster.
 	// Credentials are never stored on the lease; only the target name is referenced.
+	// Mutually exclusive with Placement.
 	// +optional
 	ClusterRef *LocalObjectReference `json:"clusterRef,omitempty"`
+
+	// Placement selects a ClusterTarget by label selector when ClusterRef is omitted.
+	// Selection is persisted in status.cluster.name and remains sticky after
+	// provisioning begins. Mutually exclusive with ClusterRef.
+	// +optional
+	Placement *PlacementSpec `json:"placement,omitempty"`
 
 	// CleanupPolicy controls finalizer behavior when remote cleanup fails.
 	// Default: RequireRemoteCleanup (do not drop the finalizer while the remote
