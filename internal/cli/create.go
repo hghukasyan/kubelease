@@ -19,6 +19,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -50,6 +51,8 @@ type createOptions struct {
 	wait          bool
 	timeout       time.Duration
 	warnings      []string
+	clusterRef    string
+	selectors     []string
 }
 
 func newCreateCommand(gf *GlobalFlags) *cobra.Command {
@@ -92,6 +95,8 @@ func newCreateCommand(gf *GlobalFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.wait, "wait", true, "Wait for environment to become Active")
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", opts.timeout, "Wait timeout")
 	cmd.Flags().StringSliceVar(&opts.warnings, "warning", nil, "Warning durations before expiry (e.g. 1h,15m)")
+	cmd.Flags().StringVar(&opts.clusterRef, "cluster-ref", "", "Exact ClusterTarget name (mutually exclusive with --selector)")
+	cmd.Flags().StringSliceVar(&opts.selectors, "selector", nil, "Placement matchLabels key=value (repeatable; exclusive with --cluster-ref)")
 
 	return cmd
 }
@@ -169,6 +174,26 @@ func BuildLease(name string, opts *createOptions) (*platformv1alpha1.Environment
 
 	if opts.defaultDeny {
 		leaseObj.Spec.NetworkPolicy = &platformv1alpha1.NetworkPolicySpec{DefaultDeny: true}
+	}
+
+	if opts.clusterRef != "" && len(opts.selectors) > 0 {
+		return nil, fmt.Errorf("--cluster-ref and --selector are mutually exclusive")
+	}
+	if opts.clusterRef != "" {
+		leaseObj.Spec.ClusterRef = &platformv1alpha1.LocalObjectReference{Name: opts.clusterRef}
+	}
+	if len(opts.selectors) > 0 {
+		match := map[string]string{}
+		for _, s := range opts.selectors {
+			k, v, ok := strings.Cut(s, "=")
+			if !ok || k == "" {
+				return nil, fmt.Errorf("invalid --selector %q (want key=value)", s)
+			}
+			match[k] = v
+		}
+		leaseObj.Spec.Placement = &platformv1alpha1.PlacementSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: match},
+		}
 	}
 
 	return leaseObj, nil

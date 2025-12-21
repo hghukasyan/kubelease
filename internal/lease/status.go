@@ -58,7 +58,7 @@ func clusterStatusEqual(a, b *platformv1alpha1.ClusterStatus) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	return a.Name == b.Name
+	return a.Name == b.Name && a.TargetUID == b.TargetUID && a.RemoteIdentity == b.RemoteIdentity
 }
 
 func effectiveEqual(a, b *platformv1alpha1.EffectiveLeaseSpec) bool {

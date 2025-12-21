@@ -144,8 +144,10 @@ func (p *provider) configAndClient(ctx context.Context, target *platformv1alpha1
 	cfg, err := RESTConfigFromKubeconfig(data)
 	if err != nil {
 		metrics.ClusterConnectionFailuresTotal.Inc()
+		metrics.ClusterAuthFailuresTotal.Inc()
 		return nil, nil, fmt.Errorf("parse kubeconfig for target %s: %w", target.Name, err)
 	}
+	ApplyClientLimits(cfg, target)
 
 	cl, err := p.newClient(cfg, client.Options{Scheme: p.scheme})
 	if err != nil {
@@ -214,17 +216,36 @@ func RESTConfigFromKubeconfig(data []byte) (*rest.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Bound remote client behaviour.
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Second
 	}
-	if cfg.QPS == 0 {
-		cfg.QPS = 20
-	}
-	if cfg.Burst == 0 {
-		cfg.Burst = 40
-	}
+	ApplyClientLimits(cfg, nil)
 	return cfg, nil
+}
+
+// ApplyClientLimits sets QPS/Burst from the ClusterTarget or safe defaults.
+// Caps prevent accidental API storms (never trust QPS=1000).
+func ApplyClientLimits(cfg *rest.Config, target *platformv1alpha1.ClusterTarget) {
+	qps := float32(20)
+	burst := 40
+	if target != nil {
+		if target.Spec.ClientQPS != nil && *target.Spec.ClientQPS > 0 {
+			qps = float32(*target.Spec.ClientQPS)
+		}
+		if target.Spec.ClientBurst != nil && *target.Spec.ClientBurst > 0 {
+			burst = int(*target.Spec.ClientBurst)
+		}
+	}
+	const maxQPS = float32(50)
+	const maxBurst = 100
+	if qps > maxQPS {
+		qps = maxQPS
+	}
+	if burst > maxBurst {
+		burst = maxBurst
+	}
+	cfg.QPS = qps
+	cfg.Burst = burst
 }
 
 func fingerprint(target *platformv1alpha1.ClusterTarget, secret *corev1.Secret, data []byte) string {

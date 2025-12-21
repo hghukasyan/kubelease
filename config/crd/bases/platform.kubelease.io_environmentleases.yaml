@@ -333,6 +333,16 @@ spec:
                       Name is the ClusterTarget name, or "local" when clusterRef/placement
                       resolved to the control-plane cluster.
                     type: string
+                  remoteIdentity:
+                    description: |-
+                      RemoteIdentity is a stable remote cluster fingerprint (typically the
+                      kube-system Namespace UID) captured when the environment was provisioned.
+                      Cleanup refuses to proceed if the live target identity differs.
+                    type: string
+                  targetUID:
+                    description: TargetUID is the ClusterTarget UID at selection time
+                      (empty for local).
+                    type: string
                 type: object
               conditions:
                 description: Conditions represent the latest available observations

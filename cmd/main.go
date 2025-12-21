@@ -17,10 +17,12 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
 	"path/filepath"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -31,6 +33,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -39,6 +42,7 @@ import (
 
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
 	"github.com/hghukasyan/kubelease/internal/controller"
+	"github.com/hghukasyan/kubelease/internal/identity"
 	"github.com/hghukasyan/kubelease/internal/remote"
 	// +kubebuilder:scaffold:imports
 )
@@ -208,10 +212,23 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	})
 
+	controlID := ""
+	if hubClient, cerr := client.New(mgr.GetConfig(), client.Options{Scheme: scheme}); cerr == nil {
+		if id, ierr := identity.ProbeRemoteIdentity(context.Background(), hubClient); ierr != nil {
+			setupLog.Error(ierr, "unable to probe control-cluster identity; continuing without stamp")
+		} else {
+			controlID = id
+			setupLog.Info("control cluster identity", "id", controlID)
+		}
+	}
+
 	if err = (&controller.EnvironmentLeaseReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Provider: provider,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Provider:         provider,
+		ControlClusterID: controlID,
+		Outages:          remote.NewOutageTracker(15*time.Second, 2*time.Minute),
+		Gate:             remote.NewTargetGate(4),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EnvironmentLease")
 		os.Exit(1)

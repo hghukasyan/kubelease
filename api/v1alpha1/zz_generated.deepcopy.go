@@ -192,6 +192,16 @@ func (in *ClusterTargetSpec) DeepCopyInto(out *ClusterTargetSpec) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.ClientQPS != nil {
+		in, out := &in.ClientQPS, &out.ClientQPS
+		*out = new(int32)
+		**out = **in
+	}
+	if in.ClientBurst != nil {
+		in, out := &in.ClientBurst, &out.ClientBurst
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Enabled != nil {
 		in, out := &in.Enabled, &out.Enabled
 		*out = new(bool)

@@ -11,15 +11,15 @@ imagePullSecrets: []
 
 controller:
   enabled: true
-  replicas: 1
+  replicas: 2
   leaderElection: true
   args: []
   resources:
     limits:
       cpu: 500m
-      memory: 128Mi
+      memory: 256Mi
     requests:
-      cpu: 10m
+      cpu: 50m
       memory: 64Mi
   securityContext:
     allowPrivilegeEscalation: false
@@ -49,6 +49,17 @@ controller:
   metrics:
     enabled: true
     port: 8443
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# Multi-cluster is always available in the controller; this flag documents intent
+# and may gate optional chart extras later. Never put remote kubeconfigs in values.
+multicluster:
+  enabled: true
+
+leaderElection:
+  enabled: true
 
 webhook:
   enabled: true

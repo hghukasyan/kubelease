@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: kubelease
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: controller
+    main: ./cmd/main.go
+    binary: kubelease-controller
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+  - id: kubectl-kubelease
+    main: ./cmd/kubectl-kubelease
+    binary: kubectl-kubelease
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+  - id: kubelease-webhook
+    main: ./cmd/kubelease-webhook
+    binary: kubelease-webhook
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: binaries
+    builds: [kubectl-kubelease]
+    format: tar.gz
+    name_template: >-
+      kubectl-kubelease_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+dockers:
+  - id: controller-amd64
+    ids: [controller]
+    image_templates:
+      - "ghcr.io/hghukasyan/kubelease:{{ .Version }}-amd64"
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+  - id: controller-arm64
+    ids: [controller]
+    image_templates:
+      - "ghcr.io/hghukasyan/kubelease:{{ .Version }}-arm64"
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+
+docker_manifests:
+  - name_template: "ghcr.io/hghukasyan/kubelease:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/hghukasyan/kubelease:{{ .Version }}-amd64"
+      - "ghcr.io/hghukasyan/kubelease:{{ .Version }}-arm64"
+
+sboms:
+  - artifacts: archive

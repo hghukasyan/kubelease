@@ -119,6 +119,40 @@ var (
 		Name: "kubelease_cluster_connection_failures_total",
 		Help: "Total failures building or authenticating remote cluster clients",
 	})
+
+	// ClusterHealth is 1 when Ready=True else 0.
+	// Label "cluster" is the ClusterTarget name — cardinality equals configured targets
+	// (typically small). Do not add namespace/lease/PR labels.
+	ClusterHealth = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubelease_cluster_health",
+		Help: "ClusterTarget readiness (1=ready, 0=not). Label cluster=ClusterTarget name.",
+	}, []string{"cluster"})
+
+	ClusterOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubelease_cluster_operations_total",
+		Help: "Remote cluster operations by cluster, operation, result",
+	}, []string{"cluster", "operation", "result"})
+
+	ClusterOperationDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kubelease_cluster_operation_duration_seconds",
+		Help:    "Remote cluster operation latency",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"cluster", "operation"})
+
+	ClusterAuthFailuresTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_cluster_auth_failures_total",
+		Help: "Total remote kubeconfig/auth failures (no secret values logged)",
+	})
+
+	PlacementAttemptsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_placement_attempts_total",
+		Help: "Total placement decisions attempted",
+	})
+
+	PlacementFailuresTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kubelease_placement_failures_total",
+		Help: "Total placement decisions with no matching target",
+	})
 )
 
 func init() {
@@ -138,12 +172,30 @@ func init() {
 		ClusterTargets,
 		RemoteOperationsTotal,
 		ClusterConnectionFailuresTotal,
+		ClusterHealth,
+		ClusterOperationsTotal,
+		ClusterOperationDuration,
+		ClusterAuthFailuresTotal,
+		PlacementAttemptsTotal,
+		PlacementFailuresTotal,
 	)
 }
 
 // ObserveRemote records a remote cluster API operation outcome.
 func ObserveRemote(operation, result string) {
 	RemoteOperationsTotal.WithLabelValues(operation, result).Inc()
+}
+
+// ObserveClusterOp records a per-cluster operation (bounded by ClusterTarget count).
+func ObserveClusterOp(cluster, operation, result string, seconds float64) {
+	if cluster == "" {
+		cluster = "local"
+	}
+	ClusterOperationsTotal.WithLabelValues(cluster, operation, result).Inc()
+	if seconds >= 0 {
+		ClusterOperationDuration.WithLabelValues(cluster, operation).Observe(seconds)
+	}
+	ObserveRemote(operation, result)
 }
 
 // ObserveSource records a bounded-cardinality source event.

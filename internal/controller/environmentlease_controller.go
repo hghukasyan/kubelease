@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
+	"github.com/hghukasyan/kubelease/internal/identity"
 	"github.com/hghukasyan/kubelease/internal/lease"
 	"github.com/hghukasyan/kubelease/internal/metrics"
 	"github.com/hghukasyan/kubelease/internal/placement"
@@ -73,8 +75,13 @@ type EnvironmentLeaseReconciler struct {
 	Recorder record.EventRecorder
 	Clock    lease.Clock
 	// Provider builds remote cluster clients for ClusterTarget-backed leases.
-	// Required when clusterRef is set; local leases use r.Client.
 	Provider remote.Provider
+	// ControlClusterID is stamped onto managed Namespaces (kube-system UID of control plane).
+	ControlClusterID string
+	// Outages shares per-target backoff across leases.
+	Outages *remote.OutageTracker
+	// Gate limits concurrent remote ops per target.
+	Gate *remote.TargetGate
 }
 
 func (r *EnvironmentLeaseReconciler) now() time.Time {
@@ -236,7 +243,15 @@ func (r *EnvironmentLeaseReconciler) reconcileActive(
 	if err != nil {
 		return r.handleTargetError(leaseObj, err)
 	}
-	leaseObj.Status.Cluster = &platformv1alpha1.ClusterStatus{Name: sess.Name}
+	if r.Gate != nil {
+		release := r.Gate.Acquire(sess.Name)
+		defer release()
+	}
+	if leaseObj.Status.Cluster == nil {
+		leaseObj.Status.Cluster = &platformv1alpha1.ClusterStatus{Name: sess.Name}
+	} else {
+		leaseObj.Status.Cluster.Name = sess.Name
+	}
 	lease.SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionTrue,
 		platformv1alpha1.ReasonEnvironmentReady, fmt.Sprintf("Using cluster %s", sess.Name))
 
@@ -352,6 +367,7 @@ func (r *EnvironmentLeaseReconciler) resolveTargetSessionForProvision(
 	leaseObj *platformv1alpha1.EnvironmentLease,
 	pol *platformv1alpha1.EnvironmentLeasePolicy,
 ) (*remote.TargetSession, *ctrl.Result, error) {
+	metrics.PlacementAttemptsTotal.Inc()
 	counts, err := placement.CountActiveLeases(ctx, r.Client)
 	if err != nil {
 		return nil, nil, err
@@ -369,16 +385,52 @@ func (r *EnvironmentLeaseReconciler) resolveTargetSessionForProvision(
 		return nil, nil, err
 	}
 	if decision.Pending {
+		metrics.PlacementFailuresTotal.Inc()
 		lease.MarkPending(leaseObj, platformv1alpha1.ReasonNoMatchingCluster, decision.Message)
 		lease.SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionFalse,
 			platformv1alpha1.ReasonNoMatchingCluster, decision.Message)
 		return nil, &ctrl.Result{RequeueAfter: targetUnavailableAfter}, nil
 	}
 
-	leaseObj.Status.Cluster = &platformv1alpha1.ClusterStatus{Name: decision.ClusterName}
+	if r.Outages != nil {
+		if wait := r.Outages.RequeueAfter(decision.ClusterName, r.now()); wait > 0 {
+			lease.SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionFalse,
+				platformv1alpha1.ReasonTargetClusterUnavailable,
+				fmt.Sprintf("target %s in shared outage backoff", decision.ClusterName))
+			return nil, &ctrl.Result{RequeueAfter: wait}, nil
+		}
+	}
+
+	clusterStatus := &platformv1alpha1.ClusterStatus{Name: decision.ClusterName}
+	if leaseObj.Status.Cluster != nil && leaseObj.Status.Cluster.Name == decision.ClusterName {
+		clusterStatus.TargetUID = leaseObj.Status.Cluster.TargetUID
+		clusterStatus.RemoteIdentity = leaseObj.Status.Cluster.RemoteIdentity
+	}
+	leaseObj.Status.Cluster = clusterStatus
+
 	sess, err := remote.ResolveNamedTarget(ctx, r.Client, r.Client, r.Provider, decision.ClusterName)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if !sess.Local {
+		target := &platformv1alpha1.ClusterTarget{}
+		if err := r.Get(ctx, types.NamespacedName{Name: sess.Name}, target); err == nil {
+			leaseObj.Status.Cluster.TargetUID = string(target.UID)
+			if target.Status.RemoteIdentity != "" {
+				leaseObj.Status.Cluster.RemoteIdentity = target.Status.RemoteIdentity
+			}
+		}
+		if leaseObj.Status.Cluster.RemoteIdentity == "" {
+			id, idErr := identity.ProbeRemoteIdentity(ctx, sess.Client)
+			if idErr != nil {
+				return nil, nil, fmt.Errorf("probe remote identity: %w", idErr)
+			}
+			leaseObj.Status.Cluster.RemoteIdentity = id
+		}
+		if r.Outages != nil {
+			r.Outages.Clear(sess.Name)
+		}
 	}
 	return sess, nil, nil
 }
@@ -402,6 +454,10 @@ func (r *EnvironmentLeaseReconciler) handleTargetError(
 ) (ctrl.Result, error) {
 	reason := platformv1alpha1.ReasonTargetClusterUnavailable
 	msg := err.Error()
+	cluster := ""
+	if leaseObj.Status.Cluster != nil {
+		cluster = leaseObj.Status.Cluster.Name
+	}
 	if te, ok := remote.AsTargetError(err); ok {
 		reason = te.Reason
 		msg = te.Message
@@ -409,19 +465,26 @@ func (r *EnvironmentLeaseReconciler) handleTargetError(
 	lease.MarkFailed(leaseObj, reason, msg)
 	lease.SetCondition(leaseObj, platformv1alpha1.ConditionTargetClusterReady, metav1.ConditionFalse, reason, msg)
 	metrics.ProvisionFailuresTotal.Inc()
-	// Do not treat as destroyed; back off instead of hot-looping.
-	return ctrl.Result{RequeueAfter: targetUnavailableAfter}, nil
+	wait := targetUnavailableAfter
+	if r.Outages != nil && cluster != "" && cluster != platformv1alpha1.LocalClusterName {
+		wait = r.Outages.MarkUnavailable(cluster, r.now())
+	}
+	return ctrl.Result{RequeueAfter: wait}, nil
 }
 
 func (r *EnvironmentLeaseReconciler) observeOp(sess *remote.TargetSession, op string, err error) {
+	r.observeClusterOp(sess, op, err, -1)
+}
+
+func (r *EnvironmentLeaseReconciler) observeClusterOp(sess *remote.TargetSession, op string, err error, seconds float64) {
 	if sess == nil || sess.Local {
 		return
 	}
+	result := metrics.ResultSuccess
 	if err != nil {
-		metrics.ObserveRemote(op, metrics.ResultFailure)
-		return
+		result = metrics.ResultFailure
 	}
-	metrics.ObserveRemote(op, metrics.ResultSuccess)
+	metrics.ObserveClusterOp(sess.Name, op, result, seconds)
 }
 
 // emitWarnings fires pending LeaseExpiring events and records delivery in status.
@@ -505,6 +568,18 @@ func (r *EnvironmentLeaseReconciler) reconcileExpired(
 	lease.MarkExpired(leaseObj, reason)
 	done, err := r.cleanupEnvironment(ctx, leaseObj)
 	if err != nil {
+		var ome *identity.OwnershipMismatchError
+		if errors.As(err, &ome) {
+			lease.MarkCleanupFailed(leaseObj, err.Error())
+			lease.SetCondition(leaseObj, platformv1alpha1.ConditionCleanup, metav1.ConditionFalse,
+				platformv1alpha1.ReasonOwnershipMismatch, err.Error())
+			lease.EnsureObservedGeneration(leaseObj)
+			if patchErr := r.patchStatusIfChanged(ctx, leaseObj, before); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
+			// Stop hot-looping; operator must fix identity or set force-cleanup-acknowledged.
+			return ctrl.Result{}, nil
+		}
 		lease.MarkCleanupFailed(leaseObj, err.Error())
 		metrics.CleanupFailuresTotal.Inc()
 		if r.Recorder != nil {
@@ -566,6 +641,16 @@ func (r *EnvironmentLeaseReconciler) reconcileDelete(
 
 	done, err := r.cleanupEnvironment(ctx, leaseObj)
 	if err != nil {
+		var ome *identity.OwnershipMismatchError
+		if errors.As(err, &ome) {
+			lease.MarkCleanupFailed(leaseObj, err.Error())
+			lease.SetCondition(leaseObj, platformv1alpha1.ConditionCleanup, metav1.ConditionFalse,
+				platformv1alpha1.ReasonOwnershipMismatch, err.Error())
+			if patchErr := r.patchStatusIfChanged(ctx, leaseObj, before); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
+			return ctrl.Result{}, nil
+		}
 		lease.MarkCleanupFailed(leaseObj, err.Error())
 		metrics.CleanupFailuresTotal.Inc()
 		if r.Recorder != nil {
@@ -622,6 +707,12 @@ func (r *EnvironmentLeaseReconciler) cleanupEnvironment(
 		return false, fmt.Errorf("refusing to delete protected namespace %q", nsName)
 	}
 
+	if identity.ForceCleanupAcknowledged(leaseObj) {
+		ctrl.LoggerFrom(ctx).Info("force-cleanup-acknowledged: skipping remote delete",
+			"namespace", nsName, "lease", leaseObj.Name)
+		return true, nil
+	}
+
 	sess, err := r.resolveTargetSession(ctx, leaseObj)
 	if err != nil {
 		mode := leaseObj.Spec.EffectiveCleanupMode()
@@ -635,9 +726,29 @@ func (r *EnvironmentLeaseReconciler) cleanupEnvironment(
 		return false, fmt.Errorf("%s: %w", platformv1alpha1.ReasonRemoteCleanupBlocked, err)
 	}
 
+	release := func() {}
+	if r.Gate != nil {
+		release = r.Gate.Acquire(sess.Name)
+	}
+	defer release()
+
+	// Prevent deleting the same Namespace name on a different cluster after credential swap.
+	if !sess.Local && leaseObj.Status.Cluster != nil && leaseObj.Status.Cluster.RemoteIdentity != "" {
+		liveID, idErr := identity.ProbeRemoteIdentity(ctx, sess.Client)
+		if idErr != nil {
+			return false, fmt.Errorf("probe target identity before cleanup: %w", idErr)
+		}
+		if err := identity.VerifyLiveTargetIdentity(leaseObj.Status.Cluster.RemoteIdentity, liveID); err != nil {
+			lease.SetCondition(leaseObj, platformv1alpha1.ConditionCleanup, metav1.ConditionFalse,
+				platformv1alpha1.ReasonOwnershipMismatch, err.Error())
+			return false, err
+		}
+	}
+
 	ns := &corev1.Namespace{}
+	start := time.Now()
 	err = sess.Client.Get(ctx, types.NamespacedName{Name: nsName}, ns)
-	r.observeOp(sess, "get", err)
+	r.observeClusterOp(sess, "get", err, time.Since(start).Seconds())
 	if apierrors.IsNotFound(err) {
 		return true, nil
 	}
@@ -651,13 +762,16 @@ func (r *EnvironmentLeaseReconciler) cleanupEnvironment(
 		return false, fmt.Errorf("get namespace %s on cluster %s: %w", nsName, sess.Name, err)
 	}
 
-	if !resources.OwnedByLease(ns, leaseObj.Name, string(leaseObj.UID)) {
-		return false, fmt.Errorf("namespace %s is not owned by lease %s; refusing cleanup", nsName, leaseObj.Name)
+	if err := identity.VerifyNamespaceOwnership(ns, leaseObj, r.ControlClusterID); err != nil {
+		lease.SetCondition(leaseObj, platformv1alpha1.ConditionCleanup, metav1.ConditionFalse,
+			platformv1alpha1.ReasonOwnershipMismatch, err.Error())
+		return false, err
 	}
 
 	if ns.DeletionTimestamp.IsZero() {
+		start := time.Now()
 		err := sess.Client.Delete(ctx, ns)
-		r.observeOp(sess, "delete", err)
+		r.observeClusterOp(sess, "delete", err, time.Since(start).Seconds())
 		if err != nil && !apierrors.IsNotFound(err) {
 			return false, fmt.Errorf("delete namespace %s on cluster %s: %w", nsName, sess.Name, err)
 		}
@@ -677,11 +791,15 @@ func (r *EnvironmentLeaseReconciler) ensureNamespace(
 		return r.ensureExistingNamespace(ctx, sess, leaseObj, leaseObj.Spec.Namespace.Name)
 	}
 
+	remoteID := ""
+	if leaseObj.Status.Cluster != nil {
+		remoteID = leaseObj.Status.Cluster.RemoteIdentity
+	}
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: leaseObj.Spec.Namespace.GenerateName,
 			Labels:       resources.MergeLabels(resources.ManagedLabels(leaseObj.Name), leaseObj.Spec.Namespace.Labels),
-			Annotations:  managedAnnotations(leaseObj),
+			Annotations:  managedAnnotations(leaseObj, r.ControlClusterID, remoteID),
 		},
 	}
 	if err := sess.Client.Create(ctx, ns); err != nil {
@@ -691,12 +809,18 @@ func (r *EnvironmentLeaseReconciler) ensureNamespace(
 	return ns.Name, true, nil
 }
 
-func managedAnnotations(leaseObj *platformv1alpha1.EnvironmentLease) map[string]string {
+func managedAnnotations(leaseObj *platformv1alpha1.EnvironmentLease, controlClusterID, remoteIdentity string) map[string]string {
 	out := map[string]string{}
 	for k, v := range leaseObj.Spec.Namespace.Annotations {
 		out[k] = v
 	}
 	out[platformv1alpha1.AnnotationLeaseUID] = string(leaseObj.UID)
+	if controlClusterID != "" {
+		out[platformv1alpha1.AnnotationControlClusterID] = controlClusterID
+	}
+	if remoteIdentity != "" {
+		out[platformv1alpha1.AnnotationTargetIdentity] = remoteIdentity
+	}
 	return out
 }
 
@@ -706,7 +830,11 @@ func (r *EnvironmentLeaseReconciler) ensureExistingNamespace(
 	leaseObj *platformv1alpha1.EnvironmentLease,
 	name string,
 ) (string, bool, error) {
-	desired, err := resources.DesiredNamespace(leaseObj, name)
+	remoteID := ""
+	if leaseObj.Status.Cluster != nil {
+		remoteID = leaseObj.Status.Cluster.RemoteIdentity
+	}
+	desired, err := resources.DesiredNamespace(leaseObj, name, r.ControlClusterID, remoteID)
 	if err != nil {
 		return "", false, err
 	}
@@ -742,6 +870,12 @@ func (r *EnvironmentLeaseReconciler) ensureExistingNamespace(
 		patched.Annotations[k] = v
 	}
 	patched.Annotations[platformv1alpha1.AnnotationLeaseUID] = string(leaseObj.UID)
+	if r.ControlClusterID != "" {
+		patched.Annotations[platformv1alpha1.AnnotationControlClusterID] = r.ControlClusterID
+	}
+	if remoteID != "" {
+		patched.Annotations[platformv1alpha1.AnnotationTargetIdentity] = remoteID
+	}
 
 	if mapsEqual(existing.Labels, patched.Labels) && mapsEqual(existing.Annotations, patched.Annotations) {
 		return name, false, nil

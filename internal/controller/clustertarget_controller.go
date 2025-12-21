@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
+	"github.com/hghukasyan/kubelease/internal/identity"
 	"github.com/hghukasyan/kubelease/internal/lease"
 	"github.com/hghukasyan/kubelease/internal/metrics"
 	"github.com/hghukasyan/kubelease/internal/placement"
@@ -195,20 +196,77 @@ func (r *ClusterTargetReconciler) reconcileHealth(ctx context.Context, target *p
 	if err != nil {
 		r.setTargetConditions(target, false, true, false,
 			platformv1alpha1.ReasonClusterUnreachable, err.Error())
+		meta.SetStatusCondition(&target.Status.Conditions, metav1.Condition{
+			Type:               platformv1alpha1.ClusterTargetConditionDegraded,
+			Status:             metav1.ConditionTrue,
+			Reason:             platformv1alpha1.ReasonClusterUnreachable,
+			Message:            err.Error(),
+			ObservedGeneration: target.Generation,
+		})
 		target.Status.ObservedGeneration = target.Generation
 		_ = r.Status().Update(ctx, target)
 		metrics.ClusterConnectionFailuresTotal.Inc()
+		metrics.ClusterHealth.WithLabelValues(target.Name).Set(0)
+		return ctrl.Result{RequeueAfter: clusterTargetBackoff}, nil
+	}
+
+	cl, err := r.Provider.ClientFor(ctx, target)
+	if err != nil {
+		r.setTargetConditions(target, false, false, false,
+			platformv1alpha1.ReasonCredentialsInvalid, err.Error())
+		target.Status.ObservedGeneration = target.Generation
+		_ = r.Status().Update(ctx, target)
+		metrics.ClusterHealth.WithLabelValues(target.Name).Set(0)
+		return ctrl.Result{RequeueAfter: clusterTargetBackoff}, nil
+	}
+	liveID, err := identity.ProbeRemoteIdentity(ctx, cl)
+	if err != nil {
+		r.setTargetConditions(target, false, true, false,
+			platformv1alpha1.ReasonClusterUnreachable, err.Error())
+		target.Status.ObservedGeneration = target.Generation
+		_ = r.Status().Update(ctx, target)
+		metrics.ClusterHealth.WithLabelValues(target.Name).Set(0)
+		return ctrl.Result{RequeueAfter: clusterTargetBackoff}, nil
+	}
+	if target.Status.RemoteIdentity == "" {
+		target.Status.RemoteIdentity = liveID
+	} else if target.Status.RemoteIdentity != liveID {
+		msg := fmt.Sprintf("remote identity changed (sticky=%s live=%s); refusing to follow credential swap",
+			target.Status.RemoteIdentity, liveID)
+		r.setTargetConditions(target, false, true, true,
+			platformv1alpha1.ReasonIdentityDrift, msg)
+		meta.SetStatusCondition(&target.Status.Conditions, metav1.Condition{
+			Type:               platformv1alpha1.ClusterTargetConditionDegraded,
+			Status:             metav1.ConditionTrue,
+			Reason:             platformv1alpha1.ReasonIdentityDrift,
+			Message:            msg,
+			ObservedGeneration: target.Generation,
+		})
+		target.Status.ObservedGeneration = target.Generation
+		_ = r.Status().Update(ctx, target)
+		metrics.ClusterHealth.WithLabelValues(target.Name).Set(0)
+		if r.Provider != nil {
+			r.Provider.Invalidate(target.Name)
+		}
 		return ctrl.Result{RequeueAfter: clusterTargetBackoff}, nil
 	}
 
 	target.Status.KubernetesVersion = ver
 	r.setTargetConditions(target, true, true, true,
 		platformv1alpha1.ReasonClusterReachable, "Remote API reachable")
+	meta.SetStatusCondition(&target.Status.Conditions, metav1.Condition{
+		Type:               platformv1alpha1.ClusterTargetConditionDegraded,
+		Status:             metav1.ConditionFalse,
+		Reason:             platformv1alpha1.ReasonClusterReachable,
+		Message:            "Healthy",
+		ObservedGeneration: target.Generation,
+	})
 	r.refreshCapacity(ctx, target)
 	target.Status.ObservedGeneration = target.Generation
 	if err := r.Status().Update(ctx, target); err != nil {
 		return ctrl.Result{}, err
 	}
+	metrics.ClusterHealth.WithLabelValues(target.Name).Set(1)
 	return ctrl.Result{RequeueAfter: clusterTargetHealthAfter}, nil
 }
 

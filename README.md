@@ -1,10 +1,10 @@
 # KubeLease
 
-Temporary Kubernetes environments with an expiration date.
+KubeLease is a Kubernetes-native control plane for temporary development
+environments across one or more clusters.
 
-KubeLease is a Kubernetes Operator that creates and manages ephemeral environments
-from an `EnvironmentLease` custom resource. When the lease expires (or is deleted),
-KubeLease safely cleans up the managed Namespace and its supporting resources.
+When a lease expires (or is deleted), KubeLease cleans up the managed Namespace
+and supporting resources — locally or on a remote `ClusterTarget`.
 
 ## Documentation
 
@@ -12,18 +12,21 @@ Detailed docs live under [`docs/`](docs/):
 
 - [Architecture](docs/architecture.md)
 - [Multi-cluster](docs/multicluster.md)
+- [Multi-cluster security](docs/multicluster-security.md)
+- [Design decisions](docs/design-decisions.md)
 - [Policies](docs/policies.md)
 - [Idle expiration](docs/idle-expiration.md)
 - [Webhook integration](docs/webhook-integration.md)
 - [GitHub integration](docs/github-integration.md)
 - [Security](docs/security.md)
+- [Multi-cluster security](docs/multicluster-security.md)
 - [Operations](docs/operations.md)
 
 ## Why KubeLease?
 
 Preview environments, CI sandboxes, and short-lived developer namespaces are easy
 to create and hard to clean up. KubeLease treats environment lifetime as a first-class
-Kubernetes API with renewal, max lifetime, expiration warnings, and a kubectl plugin.
+Kubernetes API with renewal, max lifetime, expiration warnings, placement, and a kubectl plugin.
 
 ## Use cases
 
@@ -31,8 +34,30 @@ Kubernetes API with renewal, max lifetime, expiration warnings, and a kubectl pl
 - Time-boxed developer scratch environments
 - CI job isolation with automatic teardown
 - Platform-enforced default-deny networking for ephemeral workloads
+- Multi-cluster placement by region/tier labels
 
 ## Architecture
+
+```text
+                         CONTROL CLUSTER
+
+                      +--------------------+
+                      | EnvironmentLease   |
+                      | Policy             |
+                      | ClusterTarget      |
+                      +---------+----------+
+                                |
+                       KubeLease Controller
+                                |
+                  +-------------+-------------+
+                  |                           |
+                  v                           v
+            DEV US-EAST                  DEV EU-WEST
+            +---------+                  +---------+
+            | preview |                  | preview |
+            | envs    |                  | envs    |
+            +---------+                  +---------+
+```
 
 ```text
                  +----------------------+

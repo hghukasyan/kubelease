@@ -93,9 +93,15 @@ func TestValidateNamespaceSpec(t *testing.T) {
 func TestDesiredNamespace(t *testing.T) {
 	t.Parallel()
 	leaseObj := sampleLease()
-	ns, err := DesiredNamespace(leaseObj, "preview-r82jx")
+	ns, err := DesiredNamespace(leaseObj, "preview-r82jx", "ctrl", "remote")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if ns.Annotations[platformv1alpha1.AnnotationControlClusterID] != "ctrl" {
+		t.Fatal("missing control-cluster-id")
+	}
+	if ns.Annotations[platformv1alpha1.AnnotationTargetIdentity] != "remote" {
+		t.Fatal("missing target-identity")
 	}
 	if ns.Name != "preview-r82jx" {
 		t.Fatalf("name=%s", ns.Name)
@@ -112,7 +118,7 @@ func TestDesiredNamespace(t *testing.T) {
 	if len(ns.OwnerReferences) != 0 {
 		t.Fatal("Namespace must not have OwnerReferences")
 	}
-	if _, err := DesiredNamespace(leaseObj, "default"); err == nil {
+	if _, err := DesiredNamespace(leaseObj, "default", "", ""); err == nil {
 		t.Fatal("expected error for protected namespace")
 	}
 }

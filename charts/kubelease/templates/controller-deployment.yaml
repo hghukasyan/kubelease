@@ -33,7 +33,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/manager"]
           args:
-            {{- if .Values.controller.leaderElection }}
+            {{- if or .Values.controller.leaderElection .Values.leaderElection.enabled }}
             - --leader-elect
             {{- end }}
             - --health-probe-bind-address=:8081

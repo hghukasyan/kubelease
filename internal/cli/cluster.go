@@ -37,6 +37,8 @@ func newClusterCommand(gf *GlobalFlags) *cobra.Command {
 	}
 	cmd.AddCommand(newClusterListCommand(gf))
 	cmd.AddCommand(newClusterGetCommand(gf))
+	cmd.AddCommand(newClusterDisableCommand(gf))
+	cmd.AddCommand(newClusterDrainCommand(gf))
 	return cmd
 }
 
@@ -80,7 +82,7 @@ func runClusterList(ctx context.Context, c client.Client, gf *GlobalFlags) error
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tREADY\tREGION\tACTIVE LEASES")
+	fmt.Fprintln(w, "NAME\tREADY\tENABLED\tREGION\tACTIVE LEASES")
 	for i := range list.Items {
 		t := &list.Items[i]
 		ready := "False"
@@ -95,7 +97,7 @@ func runClusterList(ctx context.Context, c client.Client, gf *GlobalFlags) error
 		if t.Status.Capacity != nil {
 			active = t.Status.Capacity.ActiveLeases
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\n", t.Name, ready, region, active)
+		fmt.Fprintf(w, "%s\t%s\t%t\t%s\t%d\n", t.Name, ready, t.Spec.IsEnabled(), region, active)
 	}
 	return w.Flush()
 }
@@ -131,4 +133,64 @@ func runClusterGet(ctx context.Context, c client.Client, gf *GlobalFlags, name s
 		}
 	}
 	return nil
+}
+
+func newClusterDisableCommand(gf *GlobalFlags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "disable NAME",
+		Short: "Disable a ClusterTarget (blocks new placement)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := newClient(gf)
+			if err != nil {
+				return err
+			}
+			return runClusterSetEnabled(cmd.Context(), c, args[0], false)
+		},
+	}
+}
+
+func newClusterDrainCommand(gf *GlobalFlags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "drain NAME",
+		Short: "Disable ClusterTarget and list remaining active leases (no auto-delete)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := newClient(gf)
+			if err != nil {
+				return err
+			}
+			if err := runClusterSetEnabled(cmd.Context(), c, args[0], false); err != nil {
+				return err
+			}
+			var list platformv1alpha1.EnvironmentLeaseList
+			if err := c.List(cmd.Context(), &list); err != nil {
+				return err
+			}
+			active := 0
+			fmt.Printf("ClusterTarget %q disabled for new placement.\nActive leases (not deleted):\n", args[0])
+			for i := range list.Items {
+				l := &list.Items[i]
+				if l.Status.Cluster == nil || l.Status.Cluster.Name != args[0] {
+					continue
+				}
+				if l.Status.Phase == platformv1alpha1.LeasePhaseExpired {
+					continue
+				}
+				active++
+				fmt.Printf("  - %s  phase=%s  namespace=%s\n", l.Name, l.Status.Phase, l.Status.Namespace)
+			}
+			fmt.Printf("%d active lease(s) remain until normal expiry.\n", active)
+			return nil
+		},
+	}
+}
+
+func runClusterSetEnabled(ctx context.Context, c client.Client, name string, enabled bool) error {
+	target := &platformv1alpha1.ClusterTarget{}
+	if err := c.Get(ctx, types.NamespacedName{Name: name}, target); err != nil {
+		return err
+	}
+	target.Spec.Enabled = &enabled
+	return c.Update(ctx, target)
 }

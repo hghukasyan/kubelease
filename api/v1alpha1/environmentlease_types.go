@@ -36,6 +36,14 @@ const (
 	LabelLease = "kubelease.io/lease"
 	// AnnotationLeaseUID binds a managed Namespace to a specific EnvironmentLease UID.
 	AnnotationLeaseUID = "kubelease.io/lease-uid"
+	// AnnotationControlClusterID identifies the control plane that owns the lease.
+	AnnotationControlClusterID = "kubelease.io/control-cluster-id"
+	// AnnotationTargetIdentity is the remote cluster identity captured at provision time.
+	AnnotationTargetIdentity = "kubelease.io/target-identity"
+	// AnnotationForceCleanupAcknowledged allows operators to unblock a stuck finalizer
+	// after confirming remote cleanup is impossible or intentionally abandoned.
+	// Value must be exactly "true". This is deliberately awkward.
+	AnnotationForceCleanupAcknowledged = "kubelease.io/force-cleanup-acknowledged"
 )
 
 // LeasePhase is a high-level lifecycle summary. Conditions are authoritative
@@ -86,6 +94,8 @@ const (
 	ReasonRemoteCleanupBlocked        = "RemoteCleanupBlocked"
 	ReasonNoMatchingCluster           = "NoMatchingCluster"
 	ReasonPlacementPending            = "PlacementPending"
+	ReasonOwnershipMismatch           = "OwnershipMismatch"
+	ReasonTargetIdentityMismatch      = "TargetIdentityMismatch"
 )
 
 // CleanupMode controls finalizer behavior when remote cleanup cannot complete.
@@ -123,6 +133,16 @@ type ClusterStatus struct {
 	// resolved to the control-plane cluster.
 	// +optional
 	Name string `json:"name,omitempty"`
+
+	// TargetUID is the ClusterTarget UID at selection time (empty for local).
+	// +optional
+	TargetUID string `json:"targetUID,omitempty"`
+
+	// RemoteIdentity is a stable remote cluster fingerprint (typically the
+	// kube-system Namespace UID) captured when the environment was provisioned.
+	// Cleanup refuses to proceed if the live target identity differs.
+	// +optional
+	RemoteIdentity string `json:"remoteIdentity,omitempty"`
 }
 
 // PlacementSpec selects a ClusterTarget via label selectors.

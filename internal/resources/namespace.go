@@ -98,7 +98,8 @@ func CanAdoptNamespace(ns *corev1.Namespace, leaseName, leaseUID string) bool {
 
 // DesiredNamespace builds the Namespace object for a lease.
 // No OwnerReference is set on Namespace.
-func DesiredNamespace(leaseObj *platformv1alpha1.EnvironmentLease, name string) (*corev1.Namespace, error) {
+// controlClusterID and remoteIdentity are stamped for safe multi-cluster cleanup.
+func DesiredNamespace(leaseObj *platformv1alpha1.EnvironmentLease, name, controlClusterID, remoteIdentity string) (*corev1.Namespace, error) {
 	if name == "" {
 		return nil, fmt.Errorf("namespace name must not be empty")
 	}
@@ -111,6 +112,15 @@ func DesiredNamespace(leaseObj *platformv1alpha1.EnvironmentLease, name string) 
 		annotations = map[string]string{}
 	}
 	annotations[platformv1alpha1.AnnotationLeaseUID] = string(leaseObj.UID)
+	if controlClusterID != "" {
+		annotations[platformv1alpha1.AnnotationControlClusterID] = controlClusterID
+	}
+	if remoteIdentity == "" && leaseObj.Status.Cluster != nil {
+		remoteIdentity = leaseObj.Status.Cluster.RemoteIdentity
+	}
+	if remoteIdentity != "" {
+		annotations[platformv1alpha1.AnnotationTargetIdentity] = remoteIdentity
+	}
 
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{

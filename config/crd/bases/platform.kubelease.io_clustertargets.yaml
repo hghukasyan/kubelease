@@ -63,6 +63,22 @@ spec:
             description: ClusterTargetSpec defines a remote Kubernetes cluster that
               may host leased environments.
             properties:
+              clientBurst:
+                description: |-
+                  ClientBurst overrides the default remote client burst for this target.
+                  Capped at 100.
+                format: int32
+                maximum: 100
+                minimum: 1
+                type: integer
+              clientQPS:
+                description: |-
+                  ClientQPS overrides the default remote client QPS for this target.
+                  Safe default is applied when unset (see remote provider). Capped at 50.
+                format: int32
+                maximum: 50
+                minimum: 1
+                type: integer
               credentials:
                 description: Credentials references authentication material. Never
                   embed kubeconfig here.
@@ -201,6 +217,12 @@ spec:
                 description: ObservedGeneration is the most recent generation observed.
                 format: int64
                 type: integer
+              remoteIdentity:
+                description: |-
+                  RemoteIdentity is a sticky fingerprint of the remote API (kube-system UID).
+                  Set on first successful health probe and compared thereafter; credential
+                  rotation that points at a different cluster sets Ready=False (IdentityDrift).
+                type: string
             type: object
         type: object
     served: true

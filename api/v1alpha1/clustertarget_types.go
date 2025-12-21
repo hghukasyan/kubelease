@@ -45,7 +45,11 @@ const (
 	ReasonClusterTargetDisabled = "TargetDisabled"
 	ReasonTargetHasActiveLeases = "TargetHasActiveLeases"
 	ReasonTargetDeleting        = "TargetDeleting"
+	ReasonIdentityDrift         = "IdentityDrift"
 )
+
+// ClusterTargetConditionDegraded marks non-fatal health issues (e.g. soft capacity pressure).
+const ClusterTargetConditionDegraded = "Degraded"
 
 // SecretKeySelector references a key in a Secret. Credentials must never be
 // embedded in the ClusterTarget itself.
@@ -94,6 +98,20 @@ type ClusterTargetSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	MaxActiveLeases *int32 `json:"maxActiveLeases,omitempty"`
 
+	// ClientQPS overrides the default remote client QPS for this target.
+	// Safe default is applied when unset (see remote provider). Capped at 50.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=50
+	ClientQPS *int32 `json:"clientQPS,omitempty"`
+
+	// ClientBurst overrides the default remote client burst for this target.
+	// Capped at 100.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	ClientBurst *int32 `json:"clientBurst,omitempty"`
+
 	// Enabled, when false, rejects new/ongoing provisioning against this target.
 	// Defaults to true when omitted.
 	// +optional
@@ -125,6 +143,12 @@ type ClusterTargetStatus struct {
 	// KubernetesVersion is the remote server version when reachable.
 	// +optional
 	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
+
+	// RemoteIdentity is a sticky fingerprint of the remote API (kube-system UID).
+	// Set on first successful health probe and compared thereafter; credential
+	// rotation that points at a different cluster sets Ready=False (IdentityDrift).
+	// +optional
+	RemoteIdentity string `json:"remoteIdentity,omitempty"`
 
 	// Capacity tracks soft lease-count usage for placement.
 	// +optional
