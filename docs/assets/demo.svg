@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-label="KubeLease CLI demo">
+  <rect width="960" height="420" rx="12" fill="#0b1220"/>
+  <rect x="0" y="0" width="960" height="36" rx="12" fill="#111827"/>
+  <circle cx="22" cy="18" r="6" fill="#ef4444"/>
+  <circle cx="42" cy="18" r="6" fill="#eab308"/>
+  <circle cx="62" cy="18" r="6" fill="#22c55e"/>
+  <text x="24" y="70" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#94a3b8">$</text>
+  <text x="44" y="70" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#e2e8f0">kubectl kubelease create demo --ttl 30m</text>
+  <text x="24" y="110" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#22c55e">EnvironmentLease/demo created</text>
+  <text x="24" y="160" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#94a3b8">$</text>
+  <text x="44" y="160" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#e2e8f0">kubectl kubelease list</text>
+  <text x="24" y="200" font-family="ui-monospace, Menlo, monospace" font-size="16" fill="#64748b">NAME   CLUSTER  NAMESPACE     EXPIRES IN  STATUS</text>
+  <text x="24" y="230" font-family="ui-monospace, Menlo, monospace" font-size="16" fill="#e2e8f0">demo   local    preview-p8x2  29m         Active</text>
+  <text x="24" y="280" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#94a3b8">$</text>
+  <text x="44" y="280" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#e2e8f0">kubectl kubelease expire demo</text>
+  <text x="24" y="320" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#fbbf24">Active ’ Cleaning ’ Expired</text>
+  <text x="24" y="360" font-family="ui-monospace, Menlo, monospace" font-size="16" fill="#22c55e">Namespace cleaned up</text>
+  <text x="24" y="395" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#475569">Regenerate with docs/demo/kubelease.tape (VHS)</text>
+</svg>

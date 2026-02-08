@@ -1,0 +1,22 @@
+# Launch checklist
+
+- [ ] README reviewed (tagline, Quick Start, honest features)
+- [ ] Demo SVG/GIF works in light and dark mode
+- [ ] Social preview uploaded (Settings → General)
+- [ ] Repository description set
+- [ ] Topics set
+- [ ] First release published (`v0.1.0`)
+- [ ] Helm install tested
+- [ ] CLI install tested (`go install` / release binary)
+- [ ] `make demo` tested from clean machine
+- [ ] Examples validated (`kubectl apply --dry-run=client`)
+- [ ] SECURITY.md present
+- [ ] CONTRIBUTING.md present
+- [ ] Issues enabled + templates
+- [ ] Discussions considered (Questions)
+- [ ] 3–5 good first issues created
+- [ ] Release binaries downloadable
+- [ ] Container image public (after first tag)
+- [ ] License verified (Apache-2.0)
+- [ ] Launch drafts customized before posting
+- [ ] Community rules checked before Reddit / HN posts

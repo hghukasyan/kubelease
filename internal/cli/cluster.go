@@ -81,6 +81,14 @@ func runClusterList(ctx context.Context, c client.Client, gf *GlobalFlags) error
 		return printObject(&list, gf.Output)
 	}
 
+	if len(list.Items) == 0 {
+		fmt.Fprintln(os.Stdout, "No ClusterTargets found.")
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, "Register a remote cluster, or omit placement to use the local cluster.")
+		fmt.Fprintln(os.Stdout, "See docs/multicluster.md")
+		return nil
+	}
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tREADY\tENABLED\tREGION\tACTIVE LEASES")
 	for i := range list.Items {

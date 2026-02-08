@@ -55,6 +55,14 @@ func runList(ctx context.Context, c client.Client, gf *GlobalFlags) error {
 		return printObject(list, gf.Output)
 	}
 
+	if len(list.Items) == 0 {
+		fmt.Fprintln(os.Stdout, "No active EnvironmentLeases found.")
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, "Create one with:")
+		fmt.Fprintln(os.Stdout, "  kubectl kubelease create demo --ttl 30m")
+		return nil
+	}
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "NAME\tCLUSTER\tNAMESPACE\tOWNER\tEXPIRES IN\tSTATUS")
 	now := time.Now()

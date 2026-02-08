@@ -1,0 +1,10 @@
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLease
+metadata:
+  name: basic-demo
+spec:
+  ttl: 30m
+  maxTTL: 2h
+  renewable: true
+  namespace:
+    generateName: preview-

@@ -68,7 +68,14 @@ func newCreateCommand(gf *GlobalFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create NAME",
 		Short: "Create an EnvironmentLease",
-		Args:  cobra.ExactArgs(1),
+		Long: `Create a temporary environment with an explicit TTL.
+
+Examples:
+  kubectl kubelease create demo --ttl 30m --max-ttl 2h
+  kubectl kubelease create preview --ttl 8h --policy preview-default --default-deny
+  kubectl kubelease create east --ttl 4h --selector kubelease.io/region=us-east
+`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := newClient(gf)
 			if err != nil {

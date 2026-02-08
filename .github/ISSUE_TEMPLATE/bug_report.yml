@@ -1,0 +1,64 @@
+name: Bug report
+description: Something is broken or behaves incorrectly
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. **Do not paste Secrets, kubeconfigs, tokens, or private keys.**
+  - type: input
+    id: kubelease-version
+    attributes:
+      label: KubeLease version
+      description: Git tag, commit SHA, or image digest
+    validations:
+      required: true
+  - type: input
+    id: kubernetes-version
+    attributes:
+      label: Kubernetes version
+      placeholder: "v1.31.x"
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Installation method
+      options:
+        - make deploy / kustomize
+        - Helm (charts/kubelease)
+        - make demo / Kind
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: lease-manifest
+    attributes:
+      label: EnvironmentLease manifest
+      description: Redact secrets. Prefer minimal reproduce YAML.
+      render: yaml
+  - type: textarea
+    id: status
+    attributes:
+      label: Relevant status / conditions
+      description: Output of kubectl describe / status.conditions (redacted)
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Controller / webhook logs
+      description: Snippets only. No credentials.
+      render: text
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true

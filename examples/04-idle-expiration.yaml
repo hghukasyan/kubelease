@@ -1,0 +1,13 @@
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLease
+metadata:
+  name: idle-demo
+spec:
+  ttl: 8h
+  maxTTL: 24h
+  idleTTL: 30m
+  renewable: true
+  namespace:
+    generateName: preview-
+# Heartbeat while working:
+#   kubectl kubelease touch idle-demo

@@ -43,14 +43,23 @@ func NewRootCommand() *cobra.Command {
 
 	root := &cobra.Command{
 		Use:          "kubectl-kubelease",
-		Short:        "Manage KubeLease EnvironmentLease resources",
+		Short:        "Manage ephemeral Kubernetes environments (EnvironmentLeases)",
 		SilenceUsage: true,
-		Long: `kubectl kubelease manages temporary Kubernetes environments.
+		Long: `kubectl kubelease manages temporary Kubernetes environments with TTLs.
 
 Install the binary on PATH as kubectl-kubelease so kubectl can discover it:
 
   go install github.com/hghukasyan/kubelease/cmd/kubectl-kubelease@latest
   kubectl kubelease --help
+
+Common commands:
+  create   Create a lease
+  list     List leases
+  get      Show lease details
+  extend   Renew TTL (when renewable)
+  touch    Heartbeat for idle TTL
+  expire   End a lease and clean up
+  cluster  Inspect ClusterTargets
 `,
 	}
 

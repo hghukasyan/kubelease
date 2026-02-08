@@ -63,7 +63,7 @@ test: manifests generate fmt vet setup-envtest ## Run unit + envtest suites.
 
 .PHONY: test-unit
 test-unit: ## Run unit tests only (no envtest).
-	go test ./internal/lease/ ./internal/resources/ ./internal/cli/ ./internal/placement/ ./internal/remote/ ./api/... -count=1
+	go test ./internal/lease/ ./internal/resources/ ./internal/cli/ ./internal/placement/ ./internal/remote/ ./api/... ./examples/ -count=1
 
 .PHONY: test-integration
 test-integration: manifests generate setup-envtest ## Run envtest controller tests.
@@ -113,6 +113,18 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 .PHONY: lint-config
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	$(GOLANGCI_LINT) config verify
+
+##@ Local demo
+
+.PHONY: demo
+demo: ## One-command Kind demo (create cluster, install, sample lease)
+	chmod +x hack/demo.sh hack/demo-clean.sh hack/demo/*.sh 2>/dev/null || true
+	./hack/demo.sh
+
+.PHONY: demo-clean
+demo-clean: ## Delete the Kind cluster created by make demo
+	chmod +x hack/demo-clean.sh 2>/dev/null || true
+	./hack/demo-clean.sh
 
 ##@ Build
 

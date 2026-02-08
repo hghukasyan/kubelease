@@ -1,0 +1,26 @@
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLease
+metadata:
+  name: limited-demo
+spec:
+  ttl: 2h
+  maxTTL: 8h
+  renewable: true
+  namespace:
+    generateName: preview-
+  quota:
+    requests:
+      cpu: "1"
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  limits:
+    default:
+      cpu: 500m
+      memory: 512Mi
+    defaultRequest:
+      cpu: 100m
+      memory: 128Mi
+  networkPolicy:
+    defaultDeny: true

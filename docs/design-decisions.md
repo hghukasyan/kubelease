@@ -1,6 +1,30 @@
 # Design decisions
 
-Interview-oriented notes on why KubeLease multi-cluster works the way it does.
+Interview-oriented notes on why KubeLease works the way it does.
+
+## Why a CRD-based lifecycle (not cleanup scripts)?
+
+Temporary environments deserve the same control plane as Deployments: desired
+state, status, events, RBAC, and continuous reconciliation. Scripts are
+best-effort; an `EnvironmentLease` is observable and policy-governed.
+
+## Why idempotent reconciliation?
+
+Every reconcile must be safe to retry. Controllers restart, workers race, and
+API conflicts happen. Level-based reconcile (read desired + actual, converge)
+avoids brittle step machines that break halfway.
+
+## Why ownership before destructive cleanup?
+
+Deleting a Namespace because a string name matches is unsafe across clusters
+and credential rotations. KubeLease requires lease name **and** UID markers
+before cleanup, and stops on mismatch.
+
+## Why durable inbound sources but not (yet) outbound chat notifications?
+
+Inbound GitHub/HTTP webhooks write Kubernetes objects — the API is the durability
+layer. Outbound Slack-style fan-out needs its own delivery/retry model; that is
+intentionally not claimed until implemented.
 
 ## Why control-plane / target separation?
 

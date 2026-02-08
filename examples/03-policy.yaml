@@ -1,0 +1,36 @@
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLeasePolicy
+metadata:
+  name: preview-default
+spec:
+  ttl:
+    default: 8h
+    maximum: 72h
+  maxTTL:
+    default: 72h
+    maximum: 72h
+  renewable:
+    default: true
+  quota:
+    maxCPU: "4"
+    maxMemory: 8Gi
+  networkPolicy:
+    defaultDenyRequired: true
+---
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLease
+metadata:
+  name: policy-bound
+spec:
+  policyRef:
+    name: preview-default
+  ttl: 8h
+  maxTTL: 72h
+  namespace:
+    generateName: preview-
+  quota:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+  networkPolicy:
+    defaultDeny: true

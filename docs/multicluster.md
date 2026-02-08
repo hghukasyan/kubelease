@@ -1,7 +1,7 @@
 # Multi-cluster
 
 KubeLease can provision temporary environments on remote Kubernetes clusters
-while keeping `EnvironmentLease` (and related policy/notification CRs) on the
+while keeping `EnvironmentLease` (and related policy CRs) on the
 control-plane cluster.
 
 ```text

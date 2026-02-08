@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 280" role="img" aria-label="GitHub PR to EnvironmentLease flow">
+  <rect width="720" height="280" fill="#f8fafc"/>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#64748b"/>
+    </marker>
+  </defs>
+  <rect x="24" y="100" width="130" height="60" rx="8" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="89" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" fill="#0c4a6e">PR opened</text>
+  <line x1="154" y1="130" x2="214" y2="130" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="216" y="100" width="140" height="60" rx="8" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="286" y="128" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#0c4a6e">GitHub webhook</text>
+  <text x="286" y="146" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#0369a1">HMAC verified</text>
+  <line x1="356" y1="130" x2="416" y2="130" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="418" y="100" width="140" height="60" rx="8" fill="#ecfeff" stroke="#0891b2"/>
+  <text x="488" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#155e75">EnvironmentLease</text>
+  <line x1="558" y1="130" x2="598" y2="130" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="600" y="100" width="100" height="60" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="650" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#14532d">Namespace</text>
+  <text x="360" y="40" text-anchor="middle" font-family="system-ui,sans-serif" font-size="16" font-weight="600" fill="#0f172a">GitHub PR lifecycle ’ temporary environment</text>
+  <text x="360" y="230" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#475569">PR closed ’ lease expired ’ ownership-verified cleanup</text>
+</svg>

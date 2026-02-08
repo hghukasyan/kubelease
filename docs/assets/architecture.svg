@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 360" role="img" aria-label="KubeLease architecture">
+  <rect width="800" height="360" fill="#f8fafc"/>
+  <text x="400" y="36" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18" font-weight="600" fill="#0f172a">Control cluster</text>
+  <rect x="260" y="56" width="280" height="70" rx="10" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="400" y="86" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" fill="#0c4a6e">EnvironmentLease · Policy · ClusterTarget</text>
+  <text x="400" y="108" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#0369a1">KubeLease controller</text>
+  <line x1="400" y1="126" x2="400" y2="170" stroke="#64748b" stroke-width="2"/>
+  <line x1="200" y1="170" x2="600" y2="170" stroke="#64748b" stroke-width="2"/>
+  <line x1="200" y1="170" x2="200" y2="200" stroke="#64748b" stroke-width="2"/>
+  <line x1="600" y1="170" x2="600" y2="200" stroke="#64748b" stroke-width="2"/>
+  <rect x="80" y="200" width="240" height="100" rx="10" fill="#ecfdf5" stroke="#059669"/>
+  <text x="200" y="245" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#065f46">Local / remote cluster</text>
+  <text x="200" y="270" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#047857">Temporary Namespace</text>
+  <rect x="480" y="200" width="240" height="100" rx="10" fill="#ecfdf5" stroke="#059669"/>
+  <text x="600" y="245" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#065f46">Remote ClusterTarget</text>
+  <text x="600" y="270" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#047857">Temporary Namespace</text>
+  <text x="400" y="340" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#64748b">TTL / idle / PR close ’ ownership-verified cleanup</text>
+</svg>

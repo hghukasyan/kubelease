@@ -1,378 +1,335 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="KubeLease logo" width="96" height="96">
+  </picture>
+</p>
+
 # KubeLease
 
-KubeLease is a Kubernetes-native control plane for temporary development
-environments across one or more clusters.
+**Ephemeral Kubernetes environments that clean themselves up.**
 
-When a lease expires (or is deleted), KubeLease cleans up the managed Namespace
-and supporting resources — locally or on a remote `ClusterTarget`.
+[![CI](https://github.com/hghukasyan/kubelease/actions/workflows/ci.yml/badge.svg)](https://github.com/hghukasyan/kubelease/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/hghukasyan/kubelease)](https://goreportcard.com/report/github.com/hghukasyan/kubelease)
 
-## Documentation
+KubeLease is a Go Kubernetes Operator that gives temporary development environments
+an explicit lifecycle — TTLs, renewal, idle expiration, policy controls, GitHub PR
+integration, and multi-cluster placement.
 
-Detailed docs live under [`docs/`](docs/):
+<p align="center">
+  <img src="docs/assets/demo.svg" alt="Demo: create a lease, list it, then expire it" width="720">
+</p>
 
-- [Architecture](docs/architecture.md)
-- [Multi-cluster](docs/multicluster.md)
-- [Multi-cluster security](docs/multicluster-security.md)
-- [Design decisions](docs/design-decisions.md)
-- [Policies](docs/policies.md)
-- [Idle expiration](docs/idle-expiration.md)
-- [Webhook integration](docs/webhook-integration.md)
-- [GitHub integration](docs/github-integration.md)
-- [Security](docs/security.md)
-- [Multi-cluster security](docs/multicluster-security.md)
-- [Operations](docs/operations.md)
+## Quick Start
+
+One-command local demo (Kind + controller + sample lease):
+
+```bash
+make demo
+```
+
+Or create a lease against an already-installed controller:
+
+```bash
+make cli && export PATH="$PWD/bin:$PATH"
+kubectl kubelease create demo --ttl 30m --max-ttl 2h
+kubectl kubelease list
+```
 
 ## Why KubeLease?
 
-Preview environments, CI sandboxes, and short-lived developer namespaces are easy
-to create and hard to clean up. KubeLease treats environment lifetime as a first-class
-Kubernetes API with renewal, max lifetime, expiration warnings, placement, and a kubectl plugin.
+Preview environments are easy to create and surprisingly easy to forget.
 
-## Use cases
+A failed CI cleanup step can leave Namespaces, Pods, LoadBalancers, PVCs, and other
+resources running long after a pull request is closed.
 
-- Per-PR preview namespaces
-- Time-boxed developer scratch environments
-- CI job isolation with automatic teardown
-- Platform-enforced default-deny networking for ephemeral workloads
-- Multi-cluster placement by region/tier labels
-
-## Architecture
+KubeLease gives temporary environments an explicit lifecycle.
 
 ```text
-                         CONTROL CLUSTER
-
-                      +--------------------+
-                      | EnvironmentLease   |
-                      | Policy             |
-                      | ClusterTarget      |
-                      +---------+----------+
-                                |
-                       KubeLease Controller
-                                |
-                  +-------------+-------------+
-                  |                           |
-                  v                           v
-            DEV US-EAST                  DEV EU-WEST
-            +---------+                  +---------+
-            | preview |                  | preview |
-            | envs    |                  | envs    |
-            +---------+                  +---------+
+Without KubeLease              With KubeLease
+─────────────────              ──────────────
+PR opened                      PR opened
+   ↓                              ↓
+preview namespace               EnvironmentLease (ttl=8h)
+   ↓                              ↓
+PR abandoned                   preview namespace
+   ↓                              ↓
+environment remains            TTL / idle / PR close
+   ↓                              ↓
+resources + cost accumulate    automatic cleanup
 ```
 
-```text
-                 +----------------------+
-                 |  EnvironmentLease    |  (cluster-scoped CR)
-                 |  platform.kubelease  |
-                 +----------+-----------+
-                            |
-                            | reconciles
-                            v
-                 +----------------------+
-                 | kubelease-controller |
-                 | (leader-elected)     |
-                 +----------+-----------+
-                            |
-        +-------------------+-------------------+
-        |                   |                   |
-        v                   v                   v
-  +-----------+   +----------------+   +------------------+
-  | Namespace |   | ResourceQuota  |   | LimitRange       |
-  | labels +  |   | LimitRange     |   | NetworkPolicy    |
-  | lease-uid |   | NetworkPolicy  |   | (OwnerReference) |
-  | (no OR)   |   | (OwnerRef)     |   +------------------+
-  +-----------+   +----------------+
-```
+## What it does
 
-**Design notes**
-
-- `EnvironmentLease` is **cluster-scoped** because it manages Namespaces.
-- The managed **Namespace has no OwnerReference**. Ownership uses labels
-  (`app.kubernetes.io/managed-by=kubelease`, `kubelease.io/lease=<name>`) plus
-  annotation `kubelease.io/lease-uid=<uid>`, cleaned up via the lease finalizer.
-- Resources **inside** the Namespace use OwnerReferences to the lease.
-- **Renewal model:** increase `spec.ttl`. Controller sets
-  `status.expiresAt = createdAt + ttl`, clamped to `createdAt + maxTTL`.
-
-## Lifecycle
-
-```text
-Create
-  |
-  v
-Provisioning
-  |
-  v
-Active <---------+
-  |              |
-  |            Renew (increase spec.ttl)
-  |              |
-  +--------------+
-  |
-  | warnings (LeaseExpiring events)
-  v
-Expiring
-  |
-  v
-Cleaning
-  |
-  v
-Expired
-```
-
-## CLI installation
-
-```bash
-go install github.com/hghukasyan/kubelease/cmd/kubectl-kubelease@latest
-# or: make cli && export PATH="$PWD/bin:$PATH"
-
-kubectl kubelease --help
-```
-
-## Create environment
-
-```bash
-kubectl kubelease create payment-pr \
-  --ttl 8h \
-  --max-ttl 72h \
-  --owner hayk \
-  --team payments \
-  --cpu-request 2 \
-  --memory-request 4Gi \
-  --default-deny \
-  --warning 1h \
-  --warning 15m
-```
-
-## List / get / extend / touch / expire
-
-```bash
-kubectl kubelease list
-kubectl kubelease get payment-pr
-kubectl kubelease extend payment-pr --for 4h
-kubectl kubelease touch payment-pr
-kubectl kubelease expire payment-pr
-```
-
-`touch` records activity (`status.lastActivityAt`) and extends idle expiration when
-`idleTTL` is set. It never extends the hard TTL / maxTTL.
-
-`expire` deletes the `EnvironmentLease` CR. The controller finalizer performs cleanup.
-The CLI never deletes Namespaces directly.
-
-## Idle expiration
-
-When `spec.idleTTL` is set:
-
-```text
-effectiveExpiration = min(hardExpiration, lastActivityAt + idleTTL)
-```
-
-- `status.expiresAt` — hard TTL (`createdAt + ttl`)
-- `status.lastActivityAt` — last heartbeat (status; not spec)
-- `status.idleExpiresAt` — `lastActivityAt + idleTTL` (capped to hard TTL)
-- `status.effectiveExpiresAt` — deadline used for scheduling and expiry
-- `status.expirationReason` — `TTLExpired`, `IdleTimeout`, `ManualExpiration`, or `SourceClosed`
-
-```bash
-kubectl kubelease create payment-pr --ttl 8h --idle-ttl 30m
-kubectl kubelease touch payment-pr
-```
-
-## EnvironmentLeasePolicy
-
-Reusable cluster-scoped policies provide defaults and hard limits:
+A PR opens. CI (or a developer) requests an 8-hour lease. KubeLease creates a
+constrained preview Namespace. The developer can renew it if needed. The PR closes —
+or the lease expires — and KubeLease verifies ownership before cleaning up.
 
 ```yaml
 apiVersion: platform.kubelease.io/v1alpha1
-kind: EnvironmentLeasePolicy
+kind: EnvironmentLease
 metadata:
-  name: preview-default
+  name: payment-pr
 spec:
-  ttl:
-    default: 8h
-    maximum: 72h
-  quota:
-    maxCPU: "4"
-    maxMemory: 8Gi
-  networkPolicy:
-    defaultDenyRequired: true
-```
-
-Leases reference a policy with `spec.policyRef`. Omitted fields take policy
-defaults. Values that violate hard limits are **rejected** (status Failed /
-`PolicyViolation`) — they are never silently clamped.
-
-```yaml
-spec:
+  ttl: 8h
+  maxTTL: 72h
+  renewable: true
   policyRef:
     name: preview-default
+  placement:
+    selector:
+      matchLabels:
+        kubelease.io/region: us-east
 ```
 
-`status.effective` records the resolved TTL, maxTTL, renewable, and defaultDeny.
+Full API details: [docs/environment-lease.md](docs/environment-lease.md).
+More manifests: [examples/](examples/).
 
-## Generic webhook source
+## How it works
 
-KubeLease exposes an optional authenticated HTTP integration (separate from the
-controller reconciler) for external CI systems:
+```mermaid
+flowchart LR
+  User[kubectl / CI / GitHub]
+  API[Kubernetes API]
+  Lease[EnvironmentLease]
+  Operator[KubeLease Controller]
+  Target[Target Cluster]
+  NS[Temporary Namespace]
+
+  User --> API
+  API --> Lease
+  Lease --> Operator
+  Operator --> Target
+  Target --> NS
+```
 
 ```text
-External CI → HTTP webhook → EnvironmentLease → Controller
+TTL / idle / PR close
+        ↓
+   Reconcile
+        ↓
+Ownership-verified cleanup
 ```
 
-```bash
-make webhook
-# deploy optional manifests (after setting a real token + default policy):
-kubectl apply -k config/sourcewebhook
-```
+## Features
 
-```bash
-curl -sS -X POST http://kubelease-webhook.kubelease-system.svc/v1/leases \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"action":"create","name":"feature-482","owner":"payments"}'
-```
-
-Supported actions: `create`, `expire`, `touch`.
-
-Callers cannot set `namespace`, `maxTTL`, quotas, or network settings — those come
-from the configured `EnvironmentLeasePolicy` (`--default-policy`). Unknown JSON
-fields are rejected. Requests are idempotent via `requestId` / `Idempotency-Key`.
-
-## GitHub pull request integration
-
-Built on the same webhook service. GitHub signatures are verified with an HMAC
-secret stored only in a Kubernetes Secret (never on `EnvironmentLease` specs).
-
-| Event | Behavior |
+| | |
 |---|---|
-| `pull_request.opened` | Ensure lease exists |
-| `pull_request.reopened` | Ensure active lease (create if absent) |
-| `pull_request.closed` | Request lease expiration |
-| `pull_request` closed + merged | Request lease expiration (`SourceClosed`) |
+| **Automatic expiration** | TTLs and hard maximum lifetimes (`maxTTL`) |
+| **Renewable leases** | Extend without allowing forever-lived environments |
+| **Idle expiration** | Heartbeat via `kubectl kubelease touch`; expire unused sandboxes |
+| **Self-healing** | Deleted/managed ResourceQuota, LimitRange, NetworkPolicy are reconciled |
+| **Policy controls** | Enforce TTL caps, quotas, NetworkPolicy, and placement rules |
+| **Multi-cluster** | Place environments on registered `ClusterTarget` clusters |
+| **GitHub integration** | Create/expire leases from pull request lifecycle events |
+| **Observable** | Prometheus metrics, Kubernetes Events, structured status Conditions |
 
-Deterministic identity:
+## Use cases
 
-```text
-my-company/payments-api PR #1842 → EnvironmentLease/payments-api-pr-1842
-```
+- Per-PR preview namespaces that expire with the PR or a TTL
+- Time-boxed developer scratch environments
+- CI job isolation with automatic teardown
+- Platform-enforced default-deny networking for ephemeral workloads
+- Multi-cluster placement by region or tier labels
 
-```bash
-# Configure GitHub webhook: POST /v1/github/hooks
-# Secret: value of github-webhook-secret in the webhook Secret
-curl -sS -X POST http://kubelease-webhook.kubelease-system.svc/v1/github/hooks \
-  -H "X-GitHub-Event: pull_request" \
-  -H "X-GitHub-Delivery: $DELIVERY_ID" \
-  -H "X-Hub-Signature-256: sha256=..." \
-  -d @payload.json
-```
+## When should I use KubeLease?
 
-Repo → policy mapping uses `--github-repo-policies` JSON. The webhook deletes the
-lease CR only; the controller performs Namespace cleanup.
+**Use KubeLease when:**
 
-## Installation (controller)
+- preview environments should expire automatically
+- developers need temporary sandboxes
+- CI creates namespaces dynamically
+- multiple clusters host ephemeral environments
+- TTL, policy, and quotas should be centrally controlled
 
-```bash
-make install
-make deploy IMG=<your-registry>/kubelease:tag
-```
+**KubeLease is not:**
 
-## Status / Conditions
+- a replacement for Argo CD
+- a Helm deployment engine
+- a Kubernetes scheduler
+- a CI system
+- a cloud cost platform
 
-| Field | Meaning |
-|---|---|
-| `status.phase` | `Pending`, `Provisioning`, `Active`, `Expiring`, `Cleaning`, `Expired`, `Failed` |
-| `status.namespace` | Managed Namespace name |
-| `status.createdAt` | Sticky lease start (from `metadata.creationTimestamp`) |
-| `status.expiresAt` | Hard TTL: `createdAt + ttl` |
-| `status.maximumExpiresAt` | `createdAt + maxTTL` |
-| `status.lastActivityAt` | Last heartbeat (initialized to `createdAt`) |
-| `status.idleExpiresAt` | `lastActivityAt + idleTTL` (capped to hard TTL) |
-| `status.effectiveExpiresAt` | `min(expiresAt, idleExpiresAt)` |
-| `status.expirationReason` | Why the lease expired |
-| `status.warningsDelivered` | Warning keys already emitted (restart-safe) |
-| Conditions | `Ready`, `Expiring`, `Cleanup`, `Degraded` |
+### How it differs from generic janitors
 
-## Field ownership
+Generic cleanup tools often delete resources based on age or annotations.
+KubeLease models the temporary environment itself as a first-class Kubernetes
+resource with lifecycle, status, policy, renewal, source integration, and
+multi-cluster placement.
 
-| Resource | KubeLease owns | Users may add |
-|---|---|---|
-| Namespace | management labels, `kubelease.io/lease-uid` | extra labels/annotations (merged) |
-| ResourceQuota | `spec.hard`, management labels | — |
-| LimitRange | container limit item, labels | — |
-| NetworkPolicy | selector, policyTypes, empty ingress/egress | — |
-
-Manual Namespace delete while Active: controller **recreates the same** `status.namespace` name.
-
-## Metrics
-
-| Metric | Type |
-|---|---|
-| `kubelease_leases{phase=...}` | Gauge (bounded phase label) |
-| `kubelease_leases_created_total` | Counter |
-| `kubelease_leases_expired_total` | Counter |
-| `kubelease_renewals_total` | Counter |
-| `kubelease_cleanup_failures_total` | Counter |
-| `kubelease_provision_failures_total` | Counter |
-| `kubelease_warning_events_total` | Counter |
-| `kubelease_source_events_total` | Counter (`provider`, `action`, `result`) |
-| `kubelease_source_errors_total` | Counter (`provider`, `action`) |
-| `kubelease_idle_expirations_total` | Counter |
-| `kubelease_manual_expirations_total` | Counter |
-| `kubelease_policy_rejections_total` | Counter |
-| `kubelease_webhook_requests_total` | Counter (`action`, `result`) |
-| `kubelease_webhook_request_duration_seconds` | Histogram |
-
-No high-cardinality labels (`lease_name`, `owner`, `repo`, PR number, etc.).
-
-## Security model
-
-- Least-privilege ClusterRole
-- Never manages `default`, `kube-system`, `kube-public`, `kube-node-lease`
-- Cleanup requires matching lease name **and** UID annotation
-- Refuses to adopt Namespaces owned by a different lease
-- Leader election enabled in production manifests
-- Webhook auth uses a Kubernetes Secret token; body size and timeouts are enforced
-- Webhook create path cannot override policy hard limits
-
-## Development
+## CLI
 
 ```bash
-make manifests generate
-make test          # unit + envtest
-make test-unit
-make test-integration
-make lint
-make cli
-make run           # controller against current kubeconfig
-```
-
-### Kind workflow
-
-```bash
-kind create cluster --name kubelease-dev
-make install
-make run
-# other terminal:
-make cli && export PATH="$PWD/bin:$PATH"
-kubectl kubelease create demo --ttl 30m --max-ttl 2h --owner hayk --cpu-request 1 --memory-request 1Gi --default-deny
+kubectl kubelease create demo --ttl 30m
 kubectl kubelease list
+kubectl kubelease get demo
 kubectl kubelease extend demo --for 15m
-kubectl delete resourcequota kubelease-quota -n "$(kubectl get envlease demo -o jsonpath='{.status.namespace}')"
-# watch it recreate
+kubectl kubelease touch demo
 kubectl kubelease expire demo
+kubectl kubelease cluster list
 ```
+
+Install from source:
+
+```bash
+go install github.com/hghukasyan/kubelease/cmd/kubectl-kubelease@latest
+```
+
+Or build locally: `make cli` → `bin/kubectl-kubelease`.
+
+## Multi-cluster
+
+Register remote clusters as `ClusterTarget` resources, then place leases with
+`spec.clusterRef` or `spec.placement.selector`. Placement is sticky once a
+Namespace exists.
+
+See [docs/multicluster.md](docs/multicluster.md) and
+[docs/multicluster-security.md](docs/multicluster-security.md).
+
+## Policies
+
+`EnvironmentLeasePolicy` sets hard limits (TTL, quotas, NetworkPolicy, placement).
+Leases that violate policy are rejected with clear status Conditions.
+
+See [docs/policies.md](docs/policies.md).
+
+## GitHub integration
+
+<p align="center">
+  <img src="docs/assets/github-pr-flow.svg" alt="PR opened → GitHub webhook → EnvironmentLease → Namespace" width="720">
+</p>
+
+HMAC-verified GitHub webhooks create and expire leases from PR events.
+See [docs/github-integration.md](docs/github-integration.md).
+
+## Observability
+
+Prometheus metrics (bounded labels), Kubernetes Events, and Conditions such as
+`Ready`, `TargetClusterReady`, and cleanup failures.
+See [docs/observability.md](docs/observability.md).
+
+## Installation
+
+**Prerequisites:** Kubernetes cluster, `kubectl`, Docker (for local demo).
+
+### Local demo (recommended first try)
+
+```bash
+make demo        # Kind cluster + install + sample lease
+make demo-clean  # delete the demo Kind cluster
+```
+
+### From source / Kind
+
+```bash
+make install          # CRDs
+make docker-build IMG=kubelease:dev
+kind load docker-image kubelease:dev
+# point config/manager image, then:
+make deploy
+make cli
+```
+
+### Helm (in-repo chart)
+
+Install CRDs first (this chart does not own CRD lifecycle):
+
+```bash
+make install
+helm upgrade --install kubelease charts/kubelease \
+  --namespace kubelease-system --create-namespace \
+  --set image.repository=ghcr.io/hghukasyan/kubelease \
+  --set image.tag=<tag>
+```
+
+Release binaries and container images are published when a `v*` tag is cut
+(GoReleaser). Until then, build from source.
+
+Details: [docs/installation.md](docs/installation.md).
+
+## Documentation
+
+| Doc | Description |
+|---|---|
+| [Getting started](docs/getting-started.md) | Zero → first lease |
+| [Installation](docs/installation.md) | Install options |
+| [Concepts](docs/concepts.md) | Leases, policies, phases |
+| [EnvironmentLease](docs/environment-lease.md) | API overview |
+| [Policies](docs/policies.md) | Platform guards |
+| [Multi-cluster](docs/multicluster.md) | ClusterTarget + placement |
+| [GitHub](docs/github-integration.md) | PR webhooks |
+| [Webhooks](docs/webhook-integration.md) | Generic HTTP source |
+| [Observability](docs/observability.md) | Metrics & Events |
+| [Notifications](docs/notifications.md) | Events/metrics today; outbound roadmap |
+| [Versioning](docs/versioning.md) | v0.x / release policy |
+| [Security](docs/security.md) | Threat model notes |
+| [Operations](docs/operations.md) | Runbooks |
+| [Troubleshooting](docs/troubleshooting.md) | Common failures |
+| [Architecture](docs/architecture.md) | Control plane design |
+| [Design decisions](docs/design-decisions.md) | Why these choices |
+
+## Design principles
+
+- **Kubernetes-native** — desired state lives in Kubernetes APIs
+- **Safe cleanup** — ownership verified before destructive operations
+- **Idempotent** — reconciliation can safely run repeatedly
+- **Policy controlled** — users cannot bypass platform-defined limits
+- **Failure aware** — cluster and external failures appear in status
 
 ## Roadmap
 
-- Multi-cluster, Slack notifications, UI
+**Current**
+
+- TTL / maxTTL leases and renewal
+- Policies and idle expiration
+- GitHub + generic webhook sources
+- Multi-cluster placement and security hardening
+- Prometheus metrics and Helm chart
+
+**Next**
+
+- Richer placement strategies
+- Additional source integrations
+- Advanced activity signals
+- Optional UI
+- Published OCI Helm chart / Homebrew formula (after first release)
+
+## Built with
+
+Go · Kubebuilder · controller-runtime · Kubernetes · Cobra · Prometheus · Helm
 
 ## Contributing
 
-1. Fork and create a feature branch
-2. Run `make test` and `make lint`
-3. Keep reconciles level-based and idempotent
-4. Open a PR with context and test notes
+See [CONTRIBUTING.md](CONTRIBUTING.md). Questions and ideas: GitHub Discussions
+(when enabled) or Issues. Bug reports: use the issue templates.
+
+If KubeLease is useful in your workflow, consider starring the repository — it
+helps others discover the project.
+
+## Community
+
+- [Bug reports](https://github.com/hghukasyan/kubelease/issues/new?template=bug_report.yml)
+- [Feature requests](https://github.com/hghukasyan/kubelease/issues/new?template=feature_request.yml)
+- [Documentation improvements](https://github.com/hghukasyan/kubelease/issues/new?template=documentation.yml)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
 
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+---
+
+**Repository metadata (GitHub About)**
+
+| Field | Recommended value |
+|---|---|
+| Description | Kubernetes-native lifecycle management for ephemeral development environments. |
+| Website | _(leave empty, or link README/docs)_ |
+| Topics | `kubernetes` `golang` `operator` `kubebuilder` `controller-runtime` `devops` `platform-engineering` `preview-environments` `kubernetes-operator` `cloud-native` `multi-cluster` `ci-cd` `developer-tools` |
+
+Social preview source: [docs/assets/social-preview.png](docs/assets/social-preview.png) (1280×640).
+Set under Settings → General → Social preview.

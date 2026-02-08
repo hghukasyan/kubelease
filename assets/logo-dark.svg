@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="KubeLease">
+  <title>KubeLease</title>
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#7dd3fc"/>
+    </linearGradient>
+  </defs>
+  <polygon
+    fill="none"
+    stroke="url(#g)"
+    stroke-width="8"
+    stroke-linejoin="round"
+    points="64,10 110,37 110,91 64,118 18,91 18,37"/>
+  <circle cx="64" cy="64" r="28" fill="none" stroke="#ffffff" stroke-width="6" opacity="0.15"/>
+  <path
+    d="M64 42 A22 22 0 1 1 48 80"
+    fill="none"
+    stroke="url(#g)"
+    stroke-width="7"
+    stroke-linecap="round"/>
+  <circle cx="64" cy="64" r="5" fill="#7dd3fc"/>
+  <line x1="64" y1="64" x2="64" y2="48" stroke="#7dd3fc" stroke-width="5" stroke-linecap="round"/>
+</svg>

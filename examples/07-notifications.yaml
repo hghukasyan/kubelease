@@ -1,0 +1,23 @@
+# Outbound durable notification destinations (e.g. Slack fan-out CRs) are not
+# implemented in the current release.
+#
+# What exists today:
+# - Kubernetes Events on EnvironmentLease
+# - Prometheus metrics
+# - Inbound HTTP / GitHub webhooks that create or expire leases
+#
+# See docs/webhook-integration.md and docs/github-integration.md.
+#
+# This file is intentionally documentation-only so examples stay honest.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubelease-notifications-note
+  namespace: default
+  labels:
+    kubelease.io/example: "07-notifications"
+data:
+  note: |
+    Use Events + metrics for observability.
+    Inbound webhooks are the supported source integration.
+    Outbound NotificationDestination APIs are roadmap only.

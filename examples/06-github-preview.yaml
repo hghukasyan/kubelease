@@ -1,0 +1,22 @@
+# Created/expired by the GitHub webhook source in practice.
+# This manifest shows the shape CI would create for a PR preview.
+# Webhook setup: docs/github-integration.md
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLease
+metadata:
+  name: github-pr-1842
+  labels:
+    kubelease.io/source: github
+spec:
+  ttl: 8h
+  maxTTL: 72h
+  renewable: true
+  policyRef:
+    name: preview-default
+  owner:
+    name: contributor
+    team: payments
+  namespace:
+    generateName: preview-
+    labels:
+      environment: preview

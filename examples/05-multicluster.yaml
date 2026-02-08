@@ -1,0 +1,16 @@
+# Requires a Ready ClusterTarget with matching labels.
+# See config/samples/platform_v1alpha1_clustertarget_lease.yaml for a starting point.
+apiVersion: platform.kubelease.io/v1alpha1
+kind: EnvironmentLease
+metadata:
+  name: multicluster-demo
+spec:
+  ttl: 4h
+  maxTTL: 24h
+  renewable: true
+  placement:
+    selector:
+      matchLabels:
+        kubelease.io/region: us-east
+  namespace:
+    generateName: preview-
