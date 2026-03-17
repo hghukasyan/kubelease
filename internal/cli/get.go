@@ -72,13 +72,13 @@ func runGet(ctx context.Context, c client.Client, gf *GlobalFlags, name string) 
 		fmt.Printf("Created:            %s ago\n", formatDuration(now.Sub(leaseObj.Status.CreatedAt.Time)))
 	}
 	if leaseObj.Status.ExpiresAt != nil {
-		fmt.Printf("Hard expires:       in %s\n", formatDuration(leaseObj.Status.ExpiresAt.Time.Sub(now)))
+		fmt.Printf("Hard expires:       in %s\n", formatDuration(leaseObj.Status.ExpiresAt.Sub(now)))
 	}
 	if leaseObj.Status.IdleExpiresAt != nil {
-		fmt.Printf("Idle expires:       in %s\n", formatDuration(leaseObj.Status.IdleExpiresAt.Time.Sub(now)))
+		fmt.Printf("Idle expires:       in %s\n", formatDuration(leaseObj.Status.IdleExpiresAt.Sub(now)))
 	}
 	if leaseObj.Status.EffectiveExpiresAt != nil {
-		fmt.Printf("Effective expires:  in %s\n", formatDuration(leaseObj.Status.EffectiveExpiresAt.Time.Sub(now)))
+		fmt.Printf("Effective expires:  in %s\n", formatDuration(leaseObj.Status.EffectiveExpiresAt.Sub(now)))
 	}
 	if leaseObj.Status.LastActivityAt != nil {
 		fmt.Printf("Last activity:      %s ago\n", formatDuration(now.Sub(leaseObj.Status.LastActivityAt.Time)))
@@ -87,7 +87,7 @@ func runGet(ctx context.Context, c client.Client, gf *GlobalFlags, name string) 
 		fmt.Printf("Expiration reason:  %s\n", leaseObj.Status.ExpirationReason)
 	}
 	if leaseObj.Status.MaximumExpiresAt != nil {
-		fmt.Printf("Maximum expiration: in %s\n", formatDuration(leaseObj.Status.MaximumExpiresAt.Time.Sub(now)))
+		fmt.Printf("Maximum expiration: in %s\n", formatDuration(leaseObj.Status.MaximumExpiresAt.Sub(now)))
 	}
 	renewable := "yes"
 	if !leaseObj.Spec.IsRenewable() {

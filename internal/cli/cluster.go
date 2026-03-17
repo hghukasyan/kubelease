@@ -82,15 +82,15 @@ func runClusterList(ctx context.Context, c client.Client, gf *GlobalFlags) error
 	}
 
 	if len(list.Items) == 0 {
-		fmt.Fprintln(os.Stdout, "No ClusterTargets found.")
-		fmt.Fprintln(os.Stdout)
-		fmt.Fprintln(os.Stdout, "Register a remote cluster, or omit placement to use the local cluster.")
-		fmt.Fprintln(os.Stdout, "See docs/multicluster.md")
+		_, _ = fmt.Fprintln(os.Stdout, "No ClusterTargets found.")
+		_, _ = fmt.Fprintln(os.Stdout)
+		_, _ = fmt.Fprintln(os.Stdout, "Register a remote cluster, or omit placement to use the local cluster.")
+		_, _ = fmt.Fprintln(os.Stdout, "See docs/multicluster.md")
 		return nil
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tREADY\tENABLED\tREGION\tACTIVE LEASES")
+	_, _ = fmt.Fprintln(w, "NAME\tREADY\tENABLED\tREGION\tACTIVE LEASES")
 	for i := range list.Items {
 		t := &list.Items[i]
 		ready := "False"
@@ -105,7 +105,7 @@ func runClusterList(ctx context.Context, c client.Client, gf *GlobalFlags) error
 		if t.Status.Capacity != nil {
 			active = t.Status.Capacity.ActiveLeases
 		}
-		fmt.Fprintf(w, "%s\t%s\t%t\t%s\t%d\n", t.Name, ready, t.Spec.IsEnabled(), region, active)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%t\t%s\t%d\n", t.Name, ready, t.Spec.IsEnabled(), region, active)
 	}
 	return w.Flush()
 }

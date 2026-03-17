@@ -93,20 +93,20 @@ func EnsureTimestamps(
 	if leaseObj.Status.CreatedAt == nil {
 		created := now.UTC()
 		if !leaseObj.CreationTimestamp.IsZero() {
-			created = leaseObj.CreationTimestamp.Time.UTC()
+			created = leaseObj.CreationTimestamp.UTC()
 		}
 		t := metav1.NewTime(created)
 		leaseObj.Status.CreatedAt = &t
 		changed = true
 	}
 
-	maxExp := metav1.NewTime(leaseObj.Status.CreatedAt.Time.Add(maxTTL))
+	maxExp := metav1.NewTime(leaseObj.Status.CreatedAt.Add(maxTTL))
 	if leaseObj.Status.MaximumExpiresAt == nil || !leaseObj.Status.MaximumExpiresAt.Equal(&maxExp) {
 		leaseObj.Status.MaximumExpiresAt = &maxExp
 		changed = true
 	}
 
-	desired := leaseObj.Status.CreatedAt.Time.Add(ttl)
+	desired := leaseObj.Status.CreatedAt.Add(ttl)
 
 	if !renewable && leaseObj.Status.ExpiresAt != nil && desired.After(leaseObj.Status.ExpiresAt.Time) {
 		desired = leaseObj.Status.ExpiresAt.Time

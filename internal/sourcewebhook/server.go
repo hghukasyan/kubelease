@@ -28,13 +28,13 @@ import (
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	s.Config.Defaults()
 	if s.TokenProvider == nil {
-		return fmt.Errorf("TokenProvider is required")
+		return fmt.Errorf("token provider is required")
 	}
 	if s.Client == nil {
-		return fmt.Errorf("Client is required")
+		return fmt.Errorf("client is required")
 	}
 	if s.Config.DefaultPolicy == "" {
-		return fmt.Errorf("DefaultPolicy is required")
+		return fmt.Errorf("default policy is required")
 	}
 
 	srv := &http.Server{

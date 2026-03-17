@@ -56,10 +56,10 @@ func runList(ctx context.Context, c client.Client, gf *GlobalFlags) error {
 	}
 
 	if len(list.Items) == 0 {
-		fmt.Fprintln(os.Stdout, "No active EnvironmentLeases found.")
-		fmt.Fprintln(os.Stdout)
-		fmt.Fprintln(os.Stdout, "Create one with:")
-		fmt.Fprintln(os.Stdout, "  kubectl kubelease create demo --ttl 30m")
+		_, _ = fmt.Fprintln(os.Stdout, "No active EnvironmentLeases found.")
+		_, _ = fmt.Fprintln(os.Stdout)
+		_, _ = fmt.Fprintln(os.Stdout, "Create one with:")
+		_, _ = fmt.Fprintln(os.Stdout, "  kubectl kubelease create demo --ttl 30m")
 		return nil
 	}
 
@@ -74,7 +74,7 @@ func runList(ctx context.Context, c client.Client, gf *GlobalFlags) error {
 		}
 		expires := "-"
 		if item.Status.ExpiresAt != nil {
-			expires = formatDuration(item.Status.ExpiresAt.Time.Sub(now))
+			expires = formatDuration(item.Status.ExpiresAt.Sub(now))
 		}
 		phase := string(item.Status.Phase)
 		if phase == "" {

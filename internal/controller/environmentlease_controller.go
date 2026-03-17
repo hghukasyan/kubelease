@@ -451,7 +451,7 @@ func (r *EnvironmentLeaseReconciler) resolveTargetSession(
 func (r *EnvironmentLeaseReconciler) handleTargetError(
 	leaseObj *platformv1alpha1.EnvironmentLease,
 	err error,
-) (ctrl.Result, error) {
+) (ctrl.Result, error) { //nolint:unparam // error kept for call-site symmetry with other helpers
 	reason := platformv1alpha1.ReasonTargetClusterUnavailable
 	msg := err.Error()
 	cluster := ""
@@ -1058,7 +1058,7 @@ func timePtr(t *metav1.Time) *time.Time {
 //     deletions, finalizer updates, and annotation-only changes.
 //   - ResourceQuota/LimitRange/NetworkPolicy via Owns for drift recovery.
 //   - Namespace via label map + status.namespace field index.
-func (r *EnvironmentLeaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *EnvironmentLeaseReconciler) SetupWithManager(mgr ctrl.Manager) error { //nolint:gocyclo // watch wiring is intentionally dense
 	if r.Recorder == nil {
 		r.Recorder = mgr.GetEventRecorderFor("environmentlease-controller")
 	}

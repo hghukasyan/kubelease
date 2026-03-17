@@ -38,7 +38,6 @@ import (
 
 	platformv1alpha1 "github.com/hghukasyan/kubelease/api/v1alpha1"
 	"github.com/hghukasyan/kubelease/internal/identity"
-	"github.com/hghukasyan/kubelease/internal/lease"
 	"github.com/hghukasyan/kubelease/internal/metrics"
 	"github.com/hghukasyan/kubelease/internal/placement"
 	"github.com/hghukasyan/kubelease/internal/remote"
@@ -56,16 +55,8 @@ type ClusterTargetReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Provider remote.Provider
-	Clock    lease.Clock
 	// ProbeVersion optionally overrides ServerVersion probing (tests).
 	ProbeVersion func(ctx context.Context, cfg *rest.Config) (string, error)
-}
-
-func (r *ClusterTargetReconciler) now() time.Time {
-	if r.Clock != nil {
-		return r.Clock.Now()
-	}
-	return time.Now().UTC()
 }
 
 func (r *ClusterTargetReconciler) probeVersion(ctx context.Context, cfg *rest.Config) (string, error) {
@@ -347,9 +338,6 @@ func (r *ClusterTargetReconciler) setTargetConditions(
 
 // SetupWithManager registers the ClusterTarget controller.
 func (r *ClusterTargetReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if r.Clock == nil {
-		r.Clock = lease.RealClock{}
-	}
 	if r.Provider == nil {
 		return fmt.Errorf("ClusterTargetReconciler.Provider is required")
 	}

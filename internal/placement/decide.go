@@ -238,7 +238,7 @@ func selectFromCandidates(
 		}
 	}
 
-	var candidates []*platformv1alpha1.ClusterTarget
+	candidates := make([]*platformv1alpha1.ClusterTarget, 0, len(list.Items))
 	for i := range list.Items {
 		t := &list.Items[i]
 		if !targetHealthyEnabled(t) {
