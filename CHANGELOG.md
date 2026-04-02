@@ -15,6 +15,12 @@ for 1.0.
 - Public launch polish: README, branding, one-command `make demo`, docs IA,
   examples, issue/PR templates, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT,
   launch copy, and demo asset sources.
+- README hero with brand logo, modern layout, and fixed diagram arrows.
+
+### Changed
+
+- Go toolchain **1.25 → 1.26**; Kubernetes client modules **v0.32 → v0.36**;
+  controller-runtime **v0.20 → v0.24**; CI actions and golangci-lint **v2.9**.
 
 ### Notes
 

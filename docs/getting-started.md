@@ -5,7 +5,7 @@ Assume you know Kubernetes basics but not KubeLease.
 ## Prerequisites
 
 - `kubectl` configured against a cluster
-- Go 1.25+ (to build CLI / controller from source)
+- Go 1.26+ (to build CLI / controller from source)
 - For the one-command path: Docker + [Kind](https://kind.sigs.k8s.io/)
 
 ## Fastest path

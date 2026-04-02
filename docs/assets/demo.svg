@@ -13,7 +13,7 @@
   <text x="24" y="230" font-family="ui-monospace, Menlo, monospace" font-size="16" fill="#e2e8f0">demo   local    preview-p8x2  29m         Active</text>
   <text x="24" y="280" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#94a3b8">$</text>
   <text x="44" y="280" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#e2e8f0">kubectl kubelease expire demo</text>
-  <text x="24" y="320" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#fbbf24">Active ’ Cleaning ’ Expired</text>
+  <text x="24" y="320" font-family="ui-monospace, Menlo, monospace" font-size="18" fill="#fbbf24">Active &#8594; Cleaning &#8594; Expired</text>
   <text x="24" y="360" font-family="ui-monospace, Menlo, monospace" font-size="16" fill="#22c55e">Namespace cleaned up</text>
   <text x="24" y="395" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#475569">Regenerate with docs/demo/kubelease.tape (VHS)</text>
 </svg>

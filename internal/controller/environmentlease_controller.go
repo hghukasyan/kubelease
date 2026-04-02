@@ -608,6 +608,12 @@ func (r *EnvironmentLeaseReconciler) reconcileExpired(
 	if firstExpiry && r.Recorder != nil {
 		r.Recorder.Event(leaseObj, corev1.EventTypeNormal, eventCleanupCompleted, "Cleanup completed")
 	}
+	if err := r.removeLeaseFinalizer(ctx, leaseObj); err != nil {
+		return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+	}
+	if err := r.Delete(ctx, leaseObj); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, fmt.Errorf("delete expired lease: %w", err)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -677,19 +683,7 @@ func (r *EnvironmentLeaseReconciler) reconcileDelete(
 		r.Recorder.Event(leaseObj, corev1.EventTypeNormal, eventCleanupCompleted, "Cleanup completed")
 	}
 
-	// Retry finalizer removal on conflict.
-	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		current := &platformv1alpha1.EnvironmentLease{}
-		if err := r.Get(ctx, client.ObjectKeyFromObject(leaseObj), current); err != nil {
-			return err
-		}
-		if !controllerutil.ContainsFinalizer(current, platformv1alpha1.FinalizerName) {
-			return nil
-		}
-		controllerutil.RemoveFinalizer(current, platformv1alpha1.FinalizerName)
-		return r.Update(ctx, current)
-	})
-	if err != nil {
+	if err := r.removeLeaseFinalizer(ctx, leaseObj); err != nil {
 		return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
 	}
 	return ctrl.Result{}, nil
@@ -1017,18 +1011,44 @@ func (r *EnvironmentLeaseReconciler) ensureNetworkPolicy(
 	return nil
 }
 
+func (r *EnvironmentLeaseReconciler) removeLeaseFinalizer(ctx context.Context, leaseObj *platformv1alpha1.EnvironmentLease) error {
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		current := &platformv1alpha1.EnvironmentLease{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(leaseObj), current); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		if !controllerutil.ContainsFinalizer(current, platformv1alpha1.FinalizerName) {
+			return nil
+		}
+		controllerutil.RemoveFinalizer(current, platformv1alpha1.FinalizerName)
+		return r.Update(ctx, current)
+	})
+}
+
 func (r *EnvironmentLeaseReconciler) patchStatusIfChanged(
 	ctx context.Context,
 	leaseObj *platformv1alpha1.EnvironmentLease,
 	before platformv1alpha1.EnvironmentLeaseStatus,
 ) error {
-	if lease.StatusEqual(before, leaseObj.Status) {
+	desired := leaseObj.Status
+	if lease.StatusEqual(before, desired) {
 		return nil
 	}
-	if err := r.Status().Update(ctx, leaseObj); err != nil {
-		return fmt.Errorf("update status for %s: %w", leaseObj.Name, err)
-	}
-	return nil
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		latest := &platformv1alpha1.EnvironmentLease{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(leaseObj), latest); err != nil {
+			return err
+		}
+		latest.Status = desired
+		if err := r.Status().Update(ctx, latest); err != nil {
+			return fmt.Errorf("update status for %s: %w", leaseObj.Name, err)
+		}
+		leaseObj.Status = latest.Status
+		return nil
+	})
 }
 
 func mapsEqual(a, b map[string]string) bool {

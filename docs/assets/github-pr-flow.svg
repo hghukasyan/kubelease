@@ -17,6 +17,6 @@
   <line x1="558" y1="130" x2="598" y2="130" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
   <rect x="600" y="100" width="100" height="60" rx="8" fill="#dcfce7" stroke="#16a34a"/>
   <text x="650" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#14532d">Namespace</text>
-  <text x="360" y="40" text-anchor="middle" font-family="system-ui,sans-serif" font-size="16" font-weight="600" fill="#0f172a">GitHub PR lifecycle ’ temporary environment</text>
-  <text x="360" y="230" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#475569">PR closed ’ lease expired ’ ownership-verified cleanup</text>
+  <text x="360" y="40" text-anchor="middle" font-family="system-ui,sans-serif" font-size="16" font-weight="600" fill="#0f172a">GitHub PR lifecycle &#8594; temporary environment</text>
+  <text x="360" y="230" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#475569">PR closed &#8594; lease expired &#8594; ownership-verified cleanup</text>
 </svg>

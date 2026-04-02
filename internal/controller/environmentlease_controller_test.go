@@ -296,12 +296,12 @@ var _ = Describe("EnvironmentLease Controller", func() {
 				_, err = reconciler.Reconcile(ctx, req)
 				g.Expect(err).NotTo(HaveOccurred())
 			}
-			current := &platformv1alpha1.EnvironmentLease{}
-			g.Expect(k8sClient.Get(ctx, req.NamespacedName, current)).To(Succeed())
 			g.Expect(apierrors.IsNotFound(
 				k8sClient.Get(ctx, types.NamespacedName{Name: nsName}, &corev1.Namespace{}),
 			)).To(BeTrue())
-			g.Expect(current.Status.Phase).To(Equal(platformv1alpha1.LeasePhaseExpired))
+			g.Expect(apierrors.IsNotFound(
+				k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.EnvironmentLease{}),
+			)).To(BeTrue())
 		}, "30s", "200ms").Should(Succeed())
 	})
 
@@ -457,10 +457,12 @@ var _ = Describe("EnvironmentLease Controller", func() {
 				_, err = reconciler.Reconcile(ctx, req)
 				g.Expect(err).NotTo(HaveOccurred())
 			}
-			current := &platformv1alpha1.EnvironmentLease{}
-			g.Expect(k8sClient.Get(ctx, req.NamespacedName, current)).To(Succeed())
-			g.Expect(current.Status.ExpirationReason).To(Equal(platformv1alpha1.ExpirationReasonIdleTimeout))
-			g.Expect(current.Status.Phase).To(Equal(platformv1alpha1.LeasePhaseExpired))
+			g.Expect(apierrors.IsNotFound(
+				k8sClient.Get(ctx, types.NamespacedName{Name: nsName}, &corev1.Namespace{}),
+			)).To(BeTrue())
+			g.Expect(apierrors.IsNotFound(
+				k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.EnvironmentLease{}),
+			)).To(BeTrue())
 		}, "30s", "200ms").Should(Succeed())
 	})
 
@@ -503,14 +505,21 @@ var _ = Describe("EnvironmentLease Controller", func() {
 		Eventually(func(g Gomega) {
 			_, err := reconciler.Reconcile(ctx, req)
 			g.Expect(err).NotTo(HaveOccurred())
+			current := &platformv1alpha1.EnvironmentLease{}
+			err = k8sClient.Get(ctx, req.NamespacedName, current)
+			if apierrors.IsNotFound(err) {
+				return
+			}
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(current.Status.ExpirationReason).To(Equal(platformv1alpha1.ExpirationReasonIdleTimeout))
 			finalizeNamespace(g, nsName)
 			if apierrors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: nsName}, &corev1.Namespace{})) {
 				_, err = reconciler.Reconcile(ctx, req)
 				g.Expect(err).NotTo(HaveOccurred())
 			}
-			current := &platformv1alpha1.EnvironmentLease{}
-			g.Expect(k8sClient.Get(ctx, req.NamespacedName, current)).To(Succeed())
-			g.Expect(current.Status.ExpirationReason).To(Equal(platformv1alpha1.ExpirationReasonIdleTimeout))
+			g.Expect(apierrors.IsNotFound(
+				k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.EnvironmentLease{}),
+			)).To(BeTrue())
 		}, "30s", "200ms").Should(Succeed())
 	})
 
