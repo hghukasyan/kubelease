@@ -1060,7 +1060,7 @@ func timePtr(t *metav1.Time) *time.Time {
 //   - Namespace via label map + status.namespace field index.
 func (r *EnvironmentLeaseReconciler) SetupWithManager(mgr ctrl.Manager) error { //nolint:gocyclo // watch wiring is intentionally dense
 	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("environmentlease-controller")
+		r.Recorder = mgr.GetEventRecorderFor("environmentlease-controller") //nolint:staticcheck // TODO: migrate to GetEventRecorder (events v1 API)
 	}
 	if r.Clock == nil {
 		r.Clock = lease.RealClock{}
